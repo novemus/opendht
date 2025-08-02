@@ -16,7 +16,15 @@
     },
     "fmt",
     "nettle",
-    "shiftmedia-libgnutls",
+    {
+        "name": "libgnutls",
+        "platform": "!windows",
+        "version>=": "3.8.10"
+    },
+    {
+        "name": "shiftmedia-libgnutls",
+        "platform": "windows"
+    },
     "msgpack",
     "jsoncpp",
     "asio",
@@ -35,7 +43,11 @@
     "tools": {
       "description": "Tools",
       "dependencies": [
-        "readline"
+        "readline",
+        {
+          "name": "pkgconf",
+          "platform": "!android"
+        }
       ]
     },
     "test": {
