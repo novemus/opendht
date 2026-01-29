@@ -1,0 +1,212 @@
+name: Artifacts
+
+on: 
+  push:
+    branches: [ library ]
+  pull_request:
+    branches: [ library ]
+
+env:
+  PACKAGE_RELEASE: ${{ github.run_number }}
+  MAINTAINER: "${{ vars.MAINTAINER }}"
+  HOMEPAGE: "${{ github.server_url }}/${{ github.repository }}"
+
+jobs:
+  ubuntu:
+    name: Debian packages
+    runs-on: ubuntu-latest
+    container: debian:13
+    env:
+      TARGET_OS: debian-trixie
+      TARGET_ARCH: x64
+      DEPENDENCIES: "build-essential cmake debhelper devscripts fakeroot pkg-config libgnutls28-dev libasio-dev libfmt-dev libssl-dev nettle-dev libargon2-dev libjsoncpp-dev"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          apt-get update
+          apt-get install -y ${{ env.DEPENDENCIES }}
+
+      - name: Build static
+        run: |
+          cmake --preset static-relwithdebinfo \
+            -DCPACK_PACKAGE_RELEASE=${{ env.PACKAGE_RELEASE }} \
+            -DCPACK_DEBIAN_PACKAGE_MAINTAINER="${{ env.MAINTAINER }}" \
+            -DCPACK_DEBIAN_PACKAGE_HOMEPAGE="${{ env.HOMEPAGE }}"
+          cmake --build --preset static-relwithdebinfo --target all
+
+      - name: Build shared
+        run: |
+          cmake --preset shared-relwithdebinfo \
+            -DCPACK_PACKAGE_RELEASE=${{ env.PACKAGE_RELEASE }} \
+            -DCPACK_DEBIAN_PACKAGE_MAINTAINER="${{ env.MAINTAINER }}" \
+            -DCPACK_DEBIAN_PACKAGE_HOMEPAGE="${{ env.HOMEPAGE }}"
+          cmake --build --preset shared-relwithdebinfo --target all
+
+      - name: Build packages
+        run: |
+          cpack --preset debian-package-lib
+          cpack --preset debian-package-dev
+
+      - name: Upload packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: debian-packages
+          path: |
+            out/${{ env.TARGET_OS }}/${{ env.TARGET_ARCH }}/build/*.deb
+            out/${{ env.TARGET_OS }}/${{ env.TARGET_ARCH }}/build/*.ddeb
+          retention-days: 7
+
+  fedora:
+    name: Fedora packages
+    runs-on: ubuntu-latest
+    container: fedora:42
+    env:
+      TARGET_OS: fedora-42
+      TARGET_ARCH: x64
+      DEPENDENCIES: "clang clang-tools-extra cmake curl rpmdevtools gnutls-devel asio-devel openssl-devel cppunit-devel fmt-devel nettle-devel libargon2-devel jsoncpp-devel msgpack-devel"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          dnf -y --setopt=tsflags=nodocs install ${{ env.DEPENDENCIES }}
+
+      - name: Build static
+        run: |
+          cmake --preset static-relwithdebinfo \
+            -DCPACK_PACKAGE_RELEASE=${{ env.PACKAGE_RELEASE }} \
+            -DCPACK_RPM_PACKAGE_VENDOR="${{ env.MAINTAINER }}" \
+            -DCPACK_RPM_PACKAGE_URL="${{ env.HOMEPAGE }}"
+          cmake --build --preset static-relwithdebinfo --target all
+
+      - name: Build shared
+        run: |
+          cmake --preset shared-relwithdebinfo \
+            -DCPACK_PACKAGE_RELEASE=${{ env.PACKAGE_RELEASE }} \
+            -DCPACK_RPM_PACKAGE_VENDOR="${{ env.MAINTAINER }}" \
+            -DCPACK_RPM_PACKAGE_URL="${{ env.HOMEPAGE }}"
+          cmake --build --preset shared-relwithdebinfo --target all
+
+      - name: Build packages
+        run: |
+          cpack --preset rpm-package-lib
+          cpack --preset rpm-package-dev
+
+      - name: Upload packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: fedora-packages
+          path: |
+            out/${{ env.TARGET_OS }}/${{ env.TARGET_ARCH }}/build/*.rpm
+          retention-days: 7
+
+  windows:
+    name: Windows archive
+    runs-on: windows-latest
+    env:
+      TARGET_OS: windows
+      TARGET_ARCH: x64
+      VCPKG_TOOLCHAIN_FILE: "C:\\vcpkg\\scripts\\buildsystems\\vcpkg.cmake"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache vcpkg dependencies
+        uses: actions/cache@v4
+        id: cache-vcpkg
+        with:
+          path: out\${{ env.TARGET_OS }}\${{ env.TARGET_ARCH }}\build\*\vcpkg_installed
+          key: ${{ runner.os }}-vcpkg-${{ env.TARGET_ARCH }}-${{ hashFiles('**/vcpkg.json', '**/vcpkg-configuration.json') }}
+          restore-keys: |
+            ${{ runner.os }}-vcpkg-${{ env.TARGET_ARCH }}-${{ hashFiles('**/vcpkg.json', '**/vcpkg-configuration.json') }}
+            ${{ runner.os }}-vcpkg-${{ env.TARGET_ARCH }}-
+
+      - name: Build static
+        shell: pwsh
+        run: |
+          cmake --preset static-relwithdebinfo `
+            -DCPACK_PACKAGE_RELEASE=${{ env.PACKAGE_RELEASE }} `
+            -DVCPKG_TARGET_TRIPLET=${{ env.TARGET_ARCH }}-windows-static `
+            -DCMAKE_TOOLCHAIN_FILE="${{ env.VCPKG_TOOLCHAIN_FILE }}"
+          cmake --build --preset static-relwithdebinfo --target ALL_BUILD
+
+      - name: Build shared
+        shell: pwsh
+        run: |
+          cmake --preset shared-relwithdebinfo `
+            -DCPACK_PACKAGE_RELEASE=${{ env.PACKAGE_RELEASE }} `
+            -DVCPKG_TARGET_TRIPLET=${{ env.TARGET_ARCH }}-windows `
+            -DCMAKE_TOOLCHAIN_FILE="${{ env.VCPKG_TOOLCHAIN_FILE }}"
+          cmake --build --preset shared-relwithdebinfo --target ALL_BUILD
+
+      - name: Build archive
+        run: |
+          cpack --preset archive
+
+      - name: Upload archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-archive
+          path: |
+            out\\${{ env.TARGET_OS }}\\${{ env.TARGET_ARCH }}\\build\\*.zip
+          retention-days: 7
+
+  macos:
+    name: MacOS archive
+    runs-on: macos-latest
+    env:
+      TARGET_OS: darwin
+      TARGET_ARCH: arm64
+      VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+      VCPKG_TOOLCHAIN_FILE: ${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          git clone https://github.com/Microsoft/vcpkg.git $VCPKG_ROOT
+          $VCPKG_ROOT/bootstrap-vcpkg.sh
+          brew install autoconf automake libtool
+
+      - name: Cache vcpkg dependencies
+        uses: actions/cache@v4
+        id: cache-vcpkg
+        with:
+          path: out/${{ env.TARGET_OS }}/${{ env.TARGET_ARCH }}/build/*/vcpkg_installed
+          key: ${{ runner.os }}-vcpkg-${{ env.TARGET_ARCH }}-${{ hashFiles('**/vcpkg.json', '**/vcpkg-configuration.json') }}
+          restore-keys: |
+            ${{ runner.os }}-vcpkg-${{ env.TARGET_ARCH }}-${{ hashFiles('**/vcpkg.json', '**/vcpkg-configuration.json') }}
+            ${{ runner.os }}-vcpkg-${{ env.TARGET_ARCH }}-
+
+      - name: Build static
+        run: |
+          cmake --preset static-relwithdebinfo \
+            -DCPACK_PACKAGE_RELEASE=${{ env.PACKAGE_RELEASE }} \
+            -DVCPKG_TARGET_TRIPLET=${{ env.TARGET_ARCH }}-osx \
+            -DCMAKE_TOOLCHAIN_FILE="${{ env.VCPKG_TOOLCHAIN_FILE }}"
+          cmake --build --preset static-relwithdebinfo --target all
+
+      - name: Build shared
+        run: |
+          cmake --preset shared-relwithdebinfo \
+            -DCPACK_PACKAGE_RELEASE=${{ env.PACKAGE_RELEASE }}  \
+            -DVCPKG_TARGET_TRIPLET=${{ env.TARGET_ARCH }}-osx-dynamic \
+            -DCMAKE_TOOLCHAIN_FILE="${{ env.VCPKG_TOOLCHAIN_FILE }}"
+          cmake --build --preset shared-relwithdebinfo --target all
+
+      - name: Build archive
+        run: |
+          cpack --preset archive
+
+      - name: Upload archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-archive
+          path: |
+            out/${{ env.TARGET_OS }}/${{ env.TARGET_ARCH }}/build/*.zip
+          retention-days: 7
