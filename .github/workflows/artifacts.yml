@@ -19,7 +19,7 @@ jobs:
     env:
       TARGET_OS: debian-trixie
       TARGET_ARCH: x64
-      DEPENDENCIES: "build-essential cmake debhelper devscripts fakeroot pkg-config libgnutls28-dev libasio-dev libfmt-dev libssl-dev nettle-dev libargon2-dev libjsoncpp-dev"
+      DEPENDENCIES: "build-essential cmake debhelper devscripts fakeroot pkg-config libgnutls28-dev libasio-dev libfmt-dev libssl-dev libcppunit-dev nettle-dev libargon2-dev libjsoncpp-dev libmsgpack-cxx-dev"
 
     steps:
       - uses: actions/checkout@v4

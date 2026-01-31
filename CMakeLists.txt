@@ -50,10 +50,6 @@ option (OPENDHT_C "Build C bindings" OFF)
 option (OPENDHT_CPACK "Add CPack support" OFF)
 option (OPENDHT_SKIP_INSTALL_DEPS "Do not install runtime dependencies" OFF)
 
-find_package(Doxygen QUIET)
-if (DOXYGEN_FOUND)
-    option (OPENDHT_DOCUMENTATION "Create and install the HTML based API documentation (requires Doxygen)" ${DOXYGEN_FOUND})
-endif ()
 # Build flags
 set (CMAKE_CXX_STANDARD 17)
 set (CMAKE_CXX_STANDARD_REQUIRED on)
@@ -578,7 +574,6 @@ endif ()
 if (OPENDHT_TOOLS)
     add_subdirectory(tools)
 endif ()
-add_subdirectory(doc)
 
 if (OPENDHT_PYTHON)
     add_subdirectory(python)

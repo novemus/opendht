@@ -18,8 +18,7 @@
     "nettle",
     {
         "name": "libgnutls",
-        "platform": "!windows",
-        "version>=": "3.8.10"
+        "platform": "!windows"
     },
     {
         "name": "shiftmedia-libgnutls",
