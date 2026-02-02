@@ -161,59 +161,42 @@ jobs:
     env:
       TARGET_OS: darwin
       TARGET_ARCH: arm64
-      STATIC_CONAN_DIR: ${{ github.workspace }}/out/darwin/arm64/static-relwithdebinfo/conan
-      SHARED_CONAN_DIR: ${{ github.workspace }}/out/darwin/arm64/shared-relwithdebinfo/conan
+      VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+      VCPKG_TOOLCHAIN_FILE: ${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: '3.13'
-          cache: 'pip'
-
-      - name: Cache Conan
-        uses: actions/cache@v4
-        id: cache-conan
-        with:
-          path: ~/.conan2/storage
-          key: ${{ runner.os }}-conan-${{ env.TARGET_ARCH }}-${{ hashFiles('**/conanfile.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-conan-${{ env.TARGET_ARCH }}-${{ hashFiles('**/conanfile.txt') }}
-            ${{ runner.os }}-conan-${{ env.TARGET_ARCH }}-
-
-      - name: Init environment
-        run: |
-          brew install autoconf automake libtool
-          python -m venv venv
-          source venv/bin/activate
-          pip install conan
-          pip install --upgrade pip
-          conan profile detect --force
-
       - name: Install dependencies
         run: |
-          source venv/bin/activate
-          conan install . --output-folder=${{ env.STATIC_CONAN_DIR }} \
-            -o "*:shared=False" --build=missing -s build_type=RelWithDebInfo \
-            -c tools.cmake.cmaketoolchain:user_presets=""
-          conan install . --output-folder=${{ env.SHARED_CONAN_DIR }} \
-            -o "*:shared=True" --build=missing -s build_type=RelWithDebInfo \
-            -c tools.cmake.cmaketoolchain:user_presets=""
+          git clone https://github.com/Microsoft/vcpkg.git $VCPKG_ROOT
+          $VCPKG_ROOT/bootstrap-vcpkg.sh
+          brew install autoconf automake libtool
+
+      - name: Cache vcpkg dependencies
+        uses: actions/cache@v4
+        id: cache-vcpkg
+        with:
+          path: out/${{ env.TARGET_OS }}/${{ env.TARGET_ARCH }}/build/*/vcpkg_installed
+          key: ${{ runner.os }}-vcpkg-${{ env.TARGET_ARCH }}-${{ hashFiles('**/vcpkg.json', '**/vcpkg-configuration.json') }}
+          restore-keys: |
+            ${{ runner.os }}-vcpkg-${{ env.TARGET_ARCH }}-${{ hashFiles('**/vcpkg.json', '**/vcpkg-configuration.json') }}
+            ${{ runner.os }}-vcpkg-${{ env.TARGET_ARCH }}-
 
       - name: Build static
         run: |
           cmake --preset static-relwithdebinfo \
             -DCPACK_PACKAGE_RELEASE=${{ env.PACKAGE_RELEASE }} \
-            -DCMAKE_TOOLCHAIN_FILE="${{ env.STATIC_CONAN_DIR }}/conan_toolchain.cmake"
+            -DVCPKG_TARGET_TRIPLET=${{ env.TARGET_ARCH }}-osx \
+            -DCMAKE_TOOLCHAIN_FILE="${{ env.VCPKG_TOOLCHAIN_FILE }}"
           cmake --build --preset static-relwithdebinfo --target all
 
       - name: Build shared
         run: |
           cmake --preset shared-relwithdebinfo \
-            -DCPACK_PACKAGE_RELEASE=${{ env.PACKAGE_RELEASE }} \
-            -DCMAKE_TOOLCHAIN_FILE="${{ env.SHARED_CONAN_DIR }}/conan_toolchain.cmake"
+            -DCPACK_PACKAGE_RELEASE=${{ env.PACKAGE_RELEASE }}  \
+            -DVCPKG_TARGET_TRIPLET=${{ env.TARGET_ARCH }}-osx \
+            -DCMAKE_TOOLCHAIN_FILE="${{ env.VCPKG_TOOLCHAIN_FILE }}"
           cmake --build --preset shared-relwithdebinfo --target all
 
       - name: Build archive
