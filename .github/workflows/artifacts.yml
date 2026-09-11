@@ -20,6 +20,8 @@ jobs:
       TARGET_OS: debian-trixie
       TARGET_ARCH: x64
       DEPENDENCIES: "build-essential cmake debhelper devscripts fakeroot pkg-config libgnutls28-dev libasio-dev libfmt-dev libssl-dev libcppunit-dev nettle-dev libargon2-dev libjsoncpp-dev libmsgpack-cxx-dev"
+      SIMDUTF_LIB_PACKAGE: ${{ vars.SIMDUTF_LIB_DEB_PACKAGE }}
+      SIMDUTF_DEV_PACKAGE: ${{ vars.SIMDUTF_DEV_DEB_PACKAGE }}
 
     steps:
       - uses: actions/checkout@v4
@@ -28,6 +30,8 @@ jobs:
         run: |
           apt-get update
           apt-get install -y ${{ env.DEPENDENCIES }}
+          curl -sL -o /tmp/libsimdutf.deb ${{ env.SIMDUTF_LIB_PACKAGE }} && apt-get install -y /tmp/libsimdutf.deb
+          curl -sL -o /tmp/libsimdutf-dev.deb ${{ env.SIMDUTF_DEV_PACKAGE }} && apt-get install -y /tmp/libsimdutf-dev.deb
 
       - name: Build static
         run: |
@@ -67,6 +71,8 @@ jobs:
       TARGET_OS: fedora-42
       TARGET_ARCH: x64
       DEPENDENCIES: "clang clang-tools-extra cmake curl rpmdevtools gnutls-devel asio-devel openssl-devel cppunit-devel fmt-devel nettle-devel libargon2-devel jsoncpp-devel msgpack-devel"
+      SIMDUTF_LIB_PACKAGE: ${{ vars.SIMDUTF_LIB_RPM_PACKAGE }}
+      SIMDUTF_DEV_PACKAGE: ${{ vars.SIMDUTF_DEV_RPM_PACKAGE }}
 
     steps:
       - uses: actions/checkout@v4
@@ -74,6 +80,8 @@ jobs:
       - name: Install dependencies
         run: |
           dnf -y --setopt=tsflags=nodocs install ${{ env.DEPENDENCIES }}
+          curl -sL -o /tmp/libsimdutf.rpm ${{ env.SIMDUTF_LIB_PACKAGE }} && dnf -y install /tmp/libsimdutf.rpm
+          curl -sL -o /tmp/libsimdutf-devel.rpm ${{ env.SIMDUTF_DEV_PACKAGE }} && dnf -y install /tmp/libsimdutf-devel.rpm
 
       - name: Build static
         run: |

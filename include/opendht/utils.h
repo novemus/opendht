@@ -1,25 +1,10 @@
-/*
- *  Copyright (C) 2014-2025 Savoir-faire Linux Inc.
- *  Author : Adrien Béraud <adrien.beraud@savoirfairelinux.com>
- *
- *  This program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License as published by
- *  the Free Software Foundation; either version 3 of the License, or
- *  (at your option) any later version.
- *
- *  This program is distributed in the hope that it will be useful,
- *  but WITHOUT ANY WARRANTY; without even the implied warranty of
- *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *  GNU General Public License for more details.
- *
- *  You should have received a copy of the GNU General Public License
- *  along with this program. If not, see <https://www.gnu.org/licenses/>.
- */
-
+// Copyright (c) 2014-2026 Savoir-faire Linux Inc.
+// SPDX-License-Identifier: MIT
 #pragma once
 
 #include "def.h"
 
+#include <type_traits>
 #include <msgpack.hpp>
 #include <fmt/format.h>
 
@@ -27,6 +12,7 @@
 #include <random>
 #include <functional>
 #include <map>
+#include <string_view>
 
 #include <cstdarg>
 
@@ -47,32 +33,49 @@ OPENDHT_PUBLIC const char* version();
 template<class T>
 using Sp = std::shared_ptr<T>;
 
-template <typename Key, typename Item, typename Condition>
-void erase_if(std::map<Key, Item>& map, const Condition& condition)
+template<typename Key, typename Item, typename Condition>
+void
+erase_if(std::map<Key, Item>& map, const Condition& condition)
 {
-    for (auto it = map.begin(); it != map.end(); ) {
+    for (auto it = map.begin(); it != map.end();) {
         if (condition(*it)) {
             it = map.erase(it);
-        } else { ++it; }
+        } else {
+            ++it;
+        }
     }
+}
+
+template<typename... Args>
+std::string
+concat(Args&&... args)
+{
+    static_assert((std::is_constructible_v<std::string_view, Args&&> && ...));
+    std::string s;
+    s.reserve((std::string_view {args}.size() + ...));
+    (s.append(std::forward<Args>(args)), ...);
+    return s;
 }
 
 /**
  * Split "[host]:port" or "host:port" to pair<"host", "port">.
  */
-OPENDHT_PUBLIC std::pair<std::string, std::string>
-splitPort(std::string_view s);
+OPENDHT_PUBLIC std::pair<std::string_view, std::string_view> splitPort(std::string_view s);
 
-class OPENDHT_PUBLIC DhtException : public std::runtime_error {
+class OPENDHT_PUBLIC DhtException : public std::runtime_error
+{
 public:
-    DhtException(const std::string &str = "") :
-        std::runtime_error("DhtException occurred: " + str) {}
+    DhtException(const std::string& str = "")
+        : std::runtime_error("DhtException occurred: " + str)
+    {}
 };
 
-class OPENDHT_PUBLIC SocketException : public DhtException {
+class OPENDHT_PUBLIC SocketException : public DhtException
+{
 public:
-    SocketException(int err) :
-        DhtException(strerror(err)) {}
+    SocketException(int err)
+        : DhtException(strerror(err))
+    {}
 };
 
 // Time related definitions and utility functions
@@ -82,50 +85,75 @@ using system_clock = std::chrono::system_clock;
 using time_point = clock::time_point;
 using duration = clock::duration;
 
-time_point from_time_t(std::time_t t);
-std::time_t to_time_t(time_point t);
+OPENDHT_PUBLIC time_point from_system_time(system_clock::time_point t,
+                                           time_point steady_now,
+                                           system_clock::time_point system_now);
+OPENDHT_PUBLIC time_point from_system_time(system_clock::time_point t);
+OPENDHT_PUBLIC system_clock::time_point to_system_time(time_point t,
+                                                       time_point steady_now,
+                                                       system_clock::time_point system_now);
+OPENDHT_PUBLIC system_clock::time_point to_system_time(time_point t);
+OPENDHT_PUBLIC time_point from_time_t(std::time_t t);
+OPENDHT_PUBLIC std::time_t to_time_t(time_point t);
 
-template <class DT>
+template<class DT>
 static std::string
-print_duration(DT d) {
+print_duration(DT d)
+{
     if (d < std::chrono::seconds(0)) {
         return "-" + print_duration(-d);
     } else if (d < std::chrono::milliseconds(1)) {
-        return fmt::format("{:.3g} us", std::chrono::duration_cast<std::chrono::duration<double, std::micro>>(d).count());
+        return fmt::format("{:.3g} us",
+                           std::chrono::duration_cast<std::chrono::duration<double, std::micro>>(d).count());
     } else if (d < std::chrono::seconds(1)) {
-        return fmt::format("{:.3g} ms", std::chrono::duration_cast<std::chrono::duration<double, std::milli>>(d).count());
+        return fmt::format("{:.3g} ms",
+                           std::chrono::duration_cast<std::chrono::duration<double, std::milli>>(d).count());
     } else if (d < std::chrono::minutes(1)) {
         return fmt::format("{:.3g} s", std::chrono::duration_cast<std::chrono::duration<double>>(d).count());
     } else if (d < std::chrono::hours(1)) {
-        return fmt::format("{:.3g} min", std::chrono::duration_cast<std::chrono::duration<double, std::ratio<60>>>(d).count());
+        return fmt::format("{:.3g} min",
+                           std::chrono::duration_cast<std::chrono::duration<double, std::ratio<60>>>(d).count());
     } else if (d < std::chrono::hours(72)) {
-        return fmt::format("{:.3g} h", std::chrono::duration_cast<std::chrono::duration<double, std::ratio<3600>>>(d).count());
+        return fmt::format("{:.3g} h",
+                           std::chrono::duration_cast<std::chrono::duration<double, std::ratio<3600>>>(d).count());
     } else {
-        return fmt::format("{:.3g} days", std::chrono::duration_cast<std::chrono::duration<double, std::ratio<86400>>>(d).count());
+        return fmt::format("{:.3g} days",
+                           std::chrono::duration_cast<std::chrono::duration<double, std::ratio<86400>>>(d).count());
     }
 }
 
-template <class TimePoint>
+template<class TimePoint>
 static std::string
-print_time_relative(TimePoint now, TimePoint d) {
-    if (d == TimePoint::min()) return "never";
-    if (d == now)              return "now";
-    return (d > now) ? std::string("in ") + print_duration(d - now)
-                     : print_duration(now - d) + std::string(" ago");
+print_time_relative(TimePoint now, TimePoint d)
+{
+    using namespace std::literals;
+    if (d == TimePoint::min())
+        return "never"s;
+    if (d == now)
+        return "now"s;
+    return (d > now) ? concat("in "sv, print_duration(d - now)) : concat(print_duration(now - d), " ago"sv);
 }
 
-template <typename Duration = duration>
-class uniform_duration_distribution : public std::uniform_int_distribution<typename Duration::rep> {
+OPENDHT_PUBLIC std::string printByteCount(size_t bytes);
+
+template<typename Duration = duration>
+class uniform_duration_distribution : public std::uniform_int_distribution<typename Duration::rep>
+{
     using Base = std::uniform_int_distribution<typename Duration::rep>;
     using param_type = typename Base::param_type;
+
 public:
-    uniform_duration_distribution(Duration min, Duration max) : Base(min.count(), max.count()) {}
-    template <class Generator>
-    Duration operator()(Generator && g) {
+    uniform_duration_distribution(Duration min, Duration max)
+        : Base(min.count(), max.count())
+    {}
+    template<class Generator>
+    Duration operator()(Generator&& g)
+    {
         return Duration(Base::operator()(g));
     }
-    template< class Generator >
-    Duration operator()( Generator && g, const param_type& params ) {
+    template<class Generator>
+    Duration operator()(Generator&& g, const param_type& params)
+    {
         return Duration(Base::operator()(g, params));
     }
 };
@@ -142,30 +170,40 @@ using Blob = std::vector<uint8_t>;
  */
 OPENDHT_PUBLIC Blob unpackBlob(const msgpack::object& o);
 
-template <typename Type>
+template<typename Type>
 Blob
-packMsg(const Type& t) {
+packMsg(const Type& t)
+{
     msgpack::sbuffer buffer;
     msgpack::packer<msgpack::sbuffer> pk(&buffer);
     pk.pack(t);
-    return {buffer.data(), buffer.data()+buffer.size()};
+    return {buffer.data(), buffer.data() + buffer.size()};
 }
 
-template <typename Type>
+template<typename Type>
 Type
-unpackMsg(Blob b) {
-    msgpack::unpacked msg_res = msgpack::unpack((const char*)b.data(), b.size());
+unpackMsg(const Blob& b)
+{
+    msgpack::unpacked msg_res = msgpack::unpack((const char*) b.data(), b.size());
     return msg_res.get().as<Type>();
 }
 
-msgpack::unpacked unpackMsg(Blob b);
+inline msgpack::unpacked
+unpackMsg(const Blob& b)
+{
+    return msgpack::unpack((const char*) b.data(), b.size());
+}
 
-msgpack::object* findMapValue(const msgpack::object& map, const char* key, size_t length);
+OPENDHT_PUBLIC msgpack::object* findMapValue(const msgpack::object& map, const char* key, size_t length);
 
-inline msgpack::object* findMapValue(const msgpack::object& map, const char* key) {
+inline msgpack::object*
+findMapValue(const msgpack::object& map, const char* key)
+{
     return findMapValue(map, key, strlen(key));
 }
-inline msgpack::object* findMapValue(const msgpack::object& map, std::string_view key) {
+inline msgpack::object*
+findMapValue(const msgpack::object& map, std::string_view key)
+{
     return findMapValue(map, key.data(), key.size());
 }
 

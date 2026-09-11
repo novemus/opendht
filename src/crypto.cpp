@@ -1,21 +1,5 @@
-/*
- *  Copyright (C) 2014-2025 Savoir-faire Linux Inc.
- *  Author : Adrien Béraud <adrien.beraud@savoirfairelinux.com>
- *           Vsevolod Ivanov <vsevolod.ivanov@savoirfairelinux.com>
- *
- *  This program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License as published by
- *  the Free Software Foundation; either version 3 of the License, or
- *  (at your option) any later version.
- *
- *  This program is distributed in the hope that it will be useful,
- *  but WITHOUT ANY WARRANTY; without even the implied warranty of
- *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *  GNU General Public License for more details.
- *
- *  You should have received a copy of the GNU General Public License
- *  along with this program. If not, see <https://www.gnu.org/licenses/>.
- */
+// Copyright (c) 2014-2026 Savoir-faire Linux Inc.
+// SPDX-License-Identifier: MIT
 
 #include "crypto.h"
 #include "rng.h"
@@ -26,6 +10,8 @@ extern "C" {
 #include <gnutls/x509.h>
 #include <nettle/gcm.h>
 #include <nettle/aes.h>
+#include <nettle/hmac.h>
+#include <nettle/version.h>
 #include <gnutls/crypto.h>
 
 #include <argon2.h>
@@ -38,7 +24,7 @@ extern "C" {
 #include <cassert>
 
 #ifdef _WIN32
-static std::uniform_int_distribution<int> rand_byte{ 0, std::numeric_limits<uint8_t>::max() };
+static std::uniform_int_distribution<int> rand_byte {0, std::numeric_limits<uint8_t>::max()};
 #else
 static std::uniform_int_distribution<uint8_t> rand_byte;
 #endif
@@ -46,32 +32,40 @@ static std::uniform_int_distribution<uint8_t> rand_byte;
 namespace dht {
 namespace crypto {
 
-static constexpr std::array<size_t, 3> AES_LENGTHS {{128/8, 192/8, 256/8}};
+static constexpr std::array<size_t, 3> AES_LENGTHS {
+    {128 / 8, 192 / 8, 256 / 8}
+};
 static constexpr size_t PASSWORD_SALT_LENGTH {16};
 
-constexpr gnutls_digest_algorithm_t gnutlsHashAlgo(size_t min_res) {
-    return (min_res > 256/8) ? GNUTLS_DIG_SHA512 : (
-           (min_res > 160/8) ? GNUTLS_DIG_SHA256 : (
-                               GNUTLS_DIG_SHA1));
+constexpr gnutls_digest_algorithm_t
+gnutlsHashAlgo(size_t min_res)
+{
+    return (min_res > 256 / 8) ? GNUTLS_DIG_SHA512 : ((min_res > 160 / 8) ? GNUTLS_DIG_SHA256 : (GNUTLS_DIG_SHA1));
 }
 
-constexpr size_t gnutlsHashSize(gnutls_digest_algorithm_t algo) {
-    return (algo == GNUTLS_DIG_SHA512) ? 512/8 : (
-           (algo == GNUTLS_DIG_SHA256) ? 256/8 : (
-           (algo == GNUTLS_DIG_SHA1)   ? 160/8 : 0 ));
+constexpr size_t
+gnutlsHashSize(gnutls_digest_algorithm_t algo)
+{
+    return (algo == GNUTLS_DIG_SHA512)
+               ? 512 / 8
+               : ((algo == GNUTLS_DIG_SHA256) ? 256 / 8 : ((algo == GNUTLS_DIG_SHA1) ? 160 / 8 : 0));
 }
 
-size_t aesKeySize(size_t max)
+size_t
+aesKeySize(size_t max)
 {
     size_t aes_key_len = 0;
     for (size_t s : AES_LENGTHS) {
-        if (s <= max) aes_key_len = s;
-        else break;
+        if (s <= max)
+            aes_key_len = s;
+        else
+            break;
     }
     return aes_key_len;
 }
 
-bool aesKeySizeGood(size_t key_size)
+bool
+aesKeySizeGood(size_t key_size)
 {
     for (auto& i : AES_LENGTHS)
         if (key_size == i)
@@ -79,14 +73,77 @@ bool aesKeySizeGood(size_t key_size)
     return false;
 }
 
+class Spki
+{
+public:
+    Spki() { gnutls_x509_spki_init(&spki); }
+    Spki(gnutls_pubkey_t pubkey)
+        : Spki()
+    {
+        auto err = gnutls_pubkey_get_spki(pubkey, spki, 0);
+        if (err < 0) {
+            gnutls_x509_spki_deinit(spki);
+            throw CryptoException(fmt::format("Unable to get SPKI from public key: {}", gnutls_strerror(err)));
+        }
+    }
+
+    ~Spki() { gnutls_x509_spki_deinit(spki); }
+
+    inline gnutls_x509_spki_t& get() { return spki; }
+
+private:
+    gnutls_x509_spki_t spki;
+};
+
 #ifndef GCM_DIGEST_SIZE
 #define GCM_DIGEST_SIZE GCM_BLOCK_SIZE
 #endif
 
-Blob aesEncrypt(const uint8_t* data, size_t data_length, const Blob& key)
+static void
+gcmAes128Digest(gcm_aes128_ctx* ctx, uint8_t* digest)
+{
+#if NETTLE_VERSION_MAJOR >= 4
+    gcm_aes128_digest(ctx, digest);
+#else
+    gcm_aes128_digest(ctx, GCM_DIGEST_SIZE, digest);
+#endif
+}
+
+static void
+gcmAes192Digest(gcm_aes192_ctx* ctx, uint8_t* digest)
+{
+#if NETTLE_VERSION_MAJOR >= 4
+    gcm_aes192_digest(ctx, digest);
+#else
+    gcm_aes192_digest(ctx, GCM_DIGEST_SIZE, digest);
+#endif
+}
+
+static void
+gcmAes256Digest(gcm_aes256_ctx* ctx, uint8_t* digest)
+{
+#if NETTLE_VERSION_MAJOR >= 4
+    gcm_aes256_digest(ctx, digest);
+#else
+    gcm_aes256_digest(ctx, GCM_DIGEST_SIZE, digest);
+#endif
+}
+
+static void
+hmacSha256Digest(hmac_sha256_ctx* ctx, uint8_t* digest)
+{
+#if NETTLE_VERSION_MAJOR >= 4
+    hmac_sha256_digest(ctx, digest);
+#else
+    hmac_sha256_digest(ctx, SHA256_DIGEST_SIZE, digest);
+#endif
+}
+
+Blob
+aesEncrypt(const uint8_t* data, size_t data_length, const Blob& key)
 {
     if (not aesKeySizeGood(key.size()))
-        throw DecryptError("Wrong key size");
+        throw DecryptError("Incorrect key size");
 
     Blob ret(data_length + GCM_IV_SIZE + GCM_DIGEST_SIZE);
     {
@@ -99,38 +156,40 @@ Blob aesEncrypt(const uint8_t* data, size_t data_length, const Blob& key)
         gcm_aes128_set_key(&aes, key.data());
         gcm_aes128_set_iv(&aes, GCM_IV_SIZE, ret.data());
         gcm_aes128_encrypt(&aes, data_length, ret.data() + GCM_IV_SIZE, data);
-        gcm_aes128_digest(&aes, GCM_DIGEST_SIZE, ret.data() + GCM_IV_SIZE + data_length);
+        gcmAes128Digest(&aes, ret.data() + GCM_IV_SIZE + data_length);
     } else if (key.size() == AES_LENGTHS[1]) {
         struct gcm_aes192_ctx aes;
         gcm_aes192_set_key(&aes, key.data());
         gcm_aes192_set_iv(&aes, GCM_IV_SIZE, ret.data());
         gcm_aes192_encrypt(&aes, data_length, ret.data() + GCM_IV_SIZE, data);
-        gcm_aes192_digest(&aes, GCM_DIGEST_SIZE, ret.data() + GCM_IV_SIZE + data_length);
+        gcmAes192Digest(&aes, ret.data() + GCM_IV_SIZE + data_length);
     } else if (key.size() == AES_LENGTHS[2]) {
         struct gcm_aes256_ctx aes;
         gcm_aes256_set_key(&aes, key.data());
         gcm_aes256_set_iv(&aes, GCM_IV_SIZE, ret.data());
         gcm_aes256_encrypt(&aes, data_length, ret.data() + GCM_IV_SIZE, data);
-        gcm_aes256_digest(&aes, GCM_DIGEST_SIZE, ret.data() + GCM_IV_SIZE + data_length);
+        gcmAes256Digest(&aes, ret.data() + GCM_IV_SIZE + data_length);
     }
 
     return ret;
 }
 
-Blob aesEncrypt(const Blob& data, std::string_view password, const Blob& salt)
+Blob
+aesEncrypt(const Blob& data, std::string_view password, const Blob& salt)
 {
     Blob salt_actual = salt;
     Blob key = stretchKey(password, salt_actual, 256 / 8);
     return aesBuildEncrypted(aesEncrypt(data, key), salt_actual);
 }
 
-Blob aesDecrypt(const uint8_t* data, size_t data_length, const Blob& key)
+Blob
+aesDecrypt(const uint8_t* data, size_t data_length, const Blob& key)
 {
     if (not aesKeySizeGood(key.size()))
-        throw DecryptError("Wrong key size");
+        throw DecryptError("Incorrect key size");
 
     if (data_length <= GCM_IV_SIZE + GCM_DIGEST_SIZE)
-        throw DecryptError("Wrong data size");
+        throw DecryptError("Incorrect data size");
 
     std::array<uint8_t, GCM_DIGEST_SIZE> digest;
 
@@ -142,51 +201,52 @@ Blob aesDecrypt(const uint8_t* data, size_t data_length, const Blob& key)
         gcm_aes128_set_key(&aes, key.data());
         gcm_aes128_set_iv(&aes, GCM_IV_SIZE, data);
         gcm_aes128_decrypt(&aes, data_sz, ret.data(), data + GCM_IV_SIZE);
-        gcm_aes128_digest(&aes, GCM_DIGEST_SIZE, digest.data());
+        gcmAes128Digest(&aes, digest.data());
     } else if (key.size() == AES_LENGTHS[1]) {
         struct gcm_aes192_ctx aes;
         gcm_aes192_set_key(&aes, key.data());
         gcm_aes192_set_iv(&aes, GCM_IV_SIZE, data);
         gcm_aes192_decrypt(&aes, data_sz, ret.data(), data + GCM_IV_SIZE);
-        gcm_aes192_digest(&aes, GCM_DIGEST_SIZE, digest.data());
+        gcmAes192Digest(&aes, digest.data());
     } else if (key.size() == AES_LENGTHS[2]) {
         struct gcm_aes256_ctx aes;
         gcm_aes256_set_key(&aes, key.data());
         gcm_aes256_set_iv(&aes, GCM_IV_SIZE, data);
         gcm_aes256_decrypt(&aes, data_sz, ret.data(), data + GCM_IV_SIZE);
-        gcm_aes256_digest(&aes, GCM_DIGEST_SIZE, digest.data());
+        gcmAes256Digest(&aes, digest.data());
     }
 
     if (not std::equal(digest.begin(), digest.end(), data + data_length - GCM_DIGEST_SIZE)) {
-        throw DecryptError("Can't decrypt data");
+        throw DecryptError("Unable to decrypt data");
     }
 
     return ret;
 }
 
-Blob aesDecrypt(const uint8_t* data, size_t data_length, std::string_view password)
+Blob
+aesDecrypt(const uint8_t* data, size_t data_length, std::string_view password)
 {
-    return aesDecrypt(
-        aesGetEncrypted(data, data_length),
-        aesGetKey(data, data_length, password)
-    );
+    return aesDecrypt(aesGetEncrypted(data, data_length), aesGetKey(data, data_length, password));
 }
 
-Blob aesGetSalt(const uint8_t* data, size_t data_length)
-{
-    if (data_length <= PASSWORD_SALT_LENGTH)
-        throw DecryptError("Wrong data size");
-    return Blob {data, data+PASSWORD_SALT_LENGTH};
-}
-
-std::string_view aesGetEncrypted(const uint8_t* data, size_t data_length)
+Blob
+aesGetSalt(const uint8_t* data, size_t data_length)
 {
     if (data_length <= PASSWORD_SALT_LENGTH)
-        throw DecryptError("Wrong data size");
-    return std::string_view((const char*)(data+PASSWORD_SALT_LENGTH), data_length - PASSWORD_SALT_LENGTH);
+        throw DecryptError("Incorrect data size");
+    return Blob {data, data + PASSWORD_SALT_LENGTH};
 }
 
-Blob aesBuildEncrypted(const uint8_t* data, size_t data_length, const Blob& salt)
+std::string_view
+aesGetEncrypted(const uint8_t* data, size_t data_length)
+{
+    if (data_length <= PASSWORD_SALT_LENGTH)
+        throw DecryptError("Incorrect data size");
+    return std::string_view((const char*) (data + PASSWORD_SALT_LENGTH), data_length - PASSWORD_SALT_LENGTH);
+}
+
+Blob
+aesBuildEncrypted(const uint8_t* data, size_t data_length, const Blob& salt)
 {
     Blob ret;
     ret.reserve(data_length + salt.size());
@@ -195,13 +255,15 @@ Blob aesBuildEncrypted(const uint8_t* data, size_t data_length, const Blob& salt
     return ret;
 }
 
-Blob aesGetKey(const uint8_t* data, size_t data_length, std::string_view password)
+Blob
+aesGetKey(const uint8_t* data, size_t data_length, std::string_view password)
 {
     Blob salt = aesGetSalt(data, data_length);
-    return stretchKey(password, salt, 256/8);
+    return stretchKey(password, salt, 256 / 8);
 }
 
-Blob stretchKey(std::string_view password, Blob& salt, size_t key_length)
+Blob
+stretchKey(std::string_view password, Blob& salt, size_t key_length)
 {
     if (salt.empty()) {
         salt.resize(PASSWORD_SALT_LENGTH);
@@ -210,43 +272,53 @@ Blob stretchKey(std::string_view password, Blob& salt, size_t key_length)
     }
     Blob res;
     res.resize(32);
-    auto ret = argon2i_hash_raw(16, 64*1024, 1, password.data(), password.size(), salt.data(), salt.size(), res.data(), res.size());
+    auto ret = argon2i_hash_raw(16,
+                                64 * 1024,
+                                1,
+                                password.data(),
+                                password.size(),
+                                salt.data(),
+                                salt.size(),
+                                res.data(),
+                                res.size());
     if (ret != ARGON2_OK)
-        throw CryptoException("Can't compute argon2i !");
+        throw CryptoException("Unable to compute Argon2i.");
     return hash(res, key_length);
 }
 
-Blob hash(const Blob& data, size_t hash_len)
+Blob
+hash(const Blob& data, size_t hash_len)
 {
     auto algo = gnutlsHashAlgo(hash_len);
     size_t res_size = gnutlsHashSize(algo);
     Blob res;
     res.resize(res_size);
-    const gnutls_datum_t gdat {(uint8_t*)data.data(), (unsigned)data.size()};
+    const gnutls_datum_t gdat {(uint8_t*) data.data(), (unsigned) data.size()};
     if (auto err = gnutls_fingerprint(algo, &gdat, res.data(), &res_size))
-        throw CryptoException(std::string("Can't compute hash: ") + gnutls_strerror(err));
+        throw CryptoException(std::string("Unable to compute hash: ") + gnutls_strerror(err));
     res.resize(std::min(hash_len, res_size));
     return res;
 }
 
-void hash(const uint8_t* data, size_t data_length, uint8_t* hash, size_t hash_length)
+void
+hash(const uint8_t* data, size_t data_length, uint8_t* hash, size_t hash_length)
 {
     auto algo = gnutlsHashAlgo(hash_length);
     size_t res_size = hash_length;
-    const gnutls_datum_t gdat {(uint8_t*)data, (unsigned)data_length};
+    const gnutls_datum_t gdat {(uint8_t*) data, (unsigned) data_length};
     if (auto err = gnutls_fingerprint(algo, &gdat, hash, &res_size))
-        throw CryptoException(std::string("Can't compute hash: ") + gnutls_strerror(err));
+        throw CryptoException(std::string("Unable to compute hash: ") + gnutls_strerror(err));
 }
 
-PrivateKey::PrivateKey()
-{}
+PrivateKey::PrivateKey() {}
 
-PrivateKey::PrivateKey(gnutls_x509_privkey_t k) : x509_key(k)
+PrivateKey::PrivateKey(gnutls_x509_privkey_t k)
+    : x509_key(k)
 {
     gnutls_privkey_init(&key);
     if (gnutls_privkey_import_x509(key, k, GNUTLS_PRIVKEY_IMPORT_COPY) != GNUTLS_E_SUCCESS) {
         key = nullptr;
-        throw CryptoException("Can't load generic private key !");
+        throw CryptoException("Unable to load generic private key.");
     }
 }
 
@@ -254,12 +326,13 @@ PrivateKey::PrivateKey(const uint8_t* src, size_t src_size, const char* password
 {
     int err = gnutls_x509_privkey_init(&x509_key);
     if (err != GNUTLS_E_SUCCESS)
-        throw CryptoException("Can't initialize private key !");
+        throw CryptoException("Unable to initialize private key.");
 
-    const gnutls_datum_t dt {(uint8_t*)src, static_cast<unsigned>(src_size)};
-    int flags = (password_ptr == NULL || strlen(password_ptr)==0) ? GNUTLS_PKCS_PLAIN
-                : ( GNUTLS_PKCS_PBES2_AES_128 | GNUTLS_PKCS_PBES2_AES_192  | GNUTLS_PKCS_PBES2_AES_256
-                  | GNUTLS_PKCS_PKCS12_3DES   | GNUTLS_PKCS_PKCS12_ARCFOUR | GNUTLS_PKCS_PKCS12_RC2_40);
+    const gnutls_datum_t dt {(uint8_t*) src, static_cast<unsigned>(src_size)};
+    int flags = (password_ptr == NULL || strlen(password_ptr) == 0)
+                    ? GNUTLS_PKCS_PLAIN
+                    : (GNUTLS_PKCS_PBES2_AES_128 | GNUTLS_PKCS_PBES2_AES_192 | GNUTLS_PKCS_PBES2_AES_256
+                       | GNUTLS_PKCS_PKCS12_3DES | GNUTLS_PKCS_PKCS12_ARCFOUR | GNUTLS_PKCS_PKCS12_RC2_40);
 
     err = gnutls_x509_privkey_import2(x509_key, &dt, GNUTLS_X509_FMT_PEM, password_ptr, flags);
     if (err != GNUTLS_E_SUCCESS) {
@@ -267,20 +340,22 @@ PrivateKey::PrivateKey(const uint8_t* src, size_t src_size, const char* password
         if (err_der != GNUTLS_E_SUCCESS) {
             gnutls_x509_privkey_deinit(x509_key);
             if (err == GNUTLS_E_DECRYPTION_FAILED or err_der == GNUTLS_E_DECRYPTION_FAILED)
-                throw DecryptError("Can't decrypt private key");
+                throw DecryptError("Unable to decrypt private key");
             else
-                throw CryptoException(std::string("Can't load private key: PEM: ") + gnutls_strerror(err)
-                                                                       + " DER: "  + gnutls_strerror(err_der));
+                throw CryptoException(std::string("Unable to load private key: PEM: ") + gnutls_strerror(err)
+                                      + " DER: " + gnutls_strerror(err_der));
         }
     }
 
     gnutls_privkey_init(&key);
     if (gnutls_privkey_import_x509(key, x509_key, GNUTLS_PRIVKEY_IMPORT_COPY) != GNUTLS_E_SUCCESS) {
-        throw CryptoException("Can't load generic private key !");
+        throw CryptoException("Unable to load generic private key.");
     }
 }
 
-PrivateKey::PrivateKey(PrivateKey&& o) noexcept : key(o.key), x509_key(o.x509_key)
+PrivateKey::PrivateKey(PrivateKey&& o) noexcept
+    : key(o.key)
+    , x509_key(o.x509_key)
 {
     o.key = nullptr;
     o.x509_key = nullptr;
@@ -309,8 +384,10 @@ PrivateKey::operator=(PrivateKey&& o) noexcept
         gnutls_x509_privkey_deinit(x509_key);
         x509_key = nullptr;
     }
-    key = o.key; x509_key = o.x509_key;
-    o.key = nullptr; o.x509_key = nullptr;
+    key = o.key;
+    x509_key = o.x509_key;
+    o.key = nullptr;
+    o.x509_key = nullptr;
     return *this;
 }
 
@@ -318,14 +395,14 @@ Blob
 PrivateKey::sign(const uint8_t* data, size_t data_length) const
 {
     if (!key)
-        throw CryptoException("Can't sign data: no private key set !");
+        throw CryptoException("Unable to sign data: no private key set.");
     if (std::numeric_limits<unsigned>::max() < data_length)
-        throw CryptoException("Can't sign data: too large !");
+        throw CryptoException("Unable to sign data: too large.");
     gnutls_datum_t sig {nullptr, 0};
-    const gnutls_datum_t dat {(unsigned char*)data, (unsigned)data_length};
+    const gnutls_datum_t dat {(unsigned char*) data, (unsigned) data_length};
     if (gnutls_privkey_sign_data(key, GNUTLS_DIG_SHA512, 0, &dat, &sig) != GNUTLS_E_SUCCESS)
-        throw CryptoException("Can't sign data !");
-    Blob ret(sig.data, sig.data+sig.size);
+        throw CryptoException("Unable to sign data.");
+    Blob ret(sig.data, sig.data + sig.size);
     gnutls_free(sig.data);
     return ret;
 }
@@ -333,12 +410,12 @@ PrivateKey::sign(const uint8_t* data, size_t data_length) const
 Blob
 PrivateKey::decryptBloc(const uint8_t* src, size_t src_size) const
 {
-    const gnutls_datum_t dat {(uint8_t*)src, (unsigned)src_size};
+    const gnutls_datum_t dat {(uint8_t*) src, (unsigned) src_size};
     gnutls_datum_t out {nullptr, 0};
     int err = gnutls_privkey_decrypt_data(key, 0, &dat, &out);
     if (err != GNUTLS_E_SUCCESS)
-        throw DecryptError(std::string("Can't decrypt data: ") + gnutls_strerror(err));
-    Blob ret {out.data, out.data+out.size};
+        throw DecryptError(std::string("Unable to decrypt data: ") + gnutls_strerror(err));
+    Blob ret {out.data, out.data + out.size};
     gnutls_free(out.data);
     return ret;
 }
@@ -347,13 +424,17 @@ Blob
 PrivateKey::decrypt(const uint8_t* cypher, size_t cypher_len) const
 {
     if (!key)
-        throw CryptoException("Can't decrypt data without private key !");
+        throw CryptoException("Unable to decrypt data without private key.");
 
     unsigned key_len = 0;
-    int err = gnutls_privkey_get_pk_algorithm(key, &key_len);
-    if (err < 0)
-        throw CryptoException("Can't read public key length !");
-    if (err != GNUTLS_PK_RSA)
+    int algo = gnutls_privkey_get_pk_algorithm(key, &key_len);
+    if (algo < 0)
+        throw CryptoException("Unable to read public key length.");
+    if (algo != GNUTLS_PK_RSA
+#if GNUTLS_VERSION_NUMBER >= 0x030804
+        && algo != GNUTLS_PK_RSA_OAEP
+#endif
+    )
         throw CryptoException("Must be an RSA key");
 
     unsigned cypher_block_sz = key_len / 8;
@@ -388,8 +469,13 @@ PrivateKey::serialize(uint8_t* out, size_t* out_len, const std::string& password
     if (!x509_key)
         return -1;
     return password.empty()
-        ? gnutls_x509_privkey_export_pkcs8(x509_key, GNUTLS_X509_FMT_PEM, nullptr,          GNUTLS_PKCS_PLAIN,         out, out_len)
-        : gnutls_x509_privkey_export_pkcs8(x509_key, GNUTLS_X509_FMT_PEM, password.c_str(), GNUTLS_PKCS_PBES2_AES_256, out, out_len);
+               ? gnutls_x509_privkey_export_pkcs8(x509_key, GNUTLS_X509_FMT_PEM, nullptr, GNUTLS_PKCS_PLAIN, out, out_len)
+               : gnutls_x509_privkey_export_pkcs8(x509_key,
+                                                  GNUTLS_X509_FMT_PEM,
+                                                  password.c_str(),
+                                                  GNUTLS_PKCS_PBES2_AES_256,
+                                                  out,
+                                                  out_len);
 }
 
 const PublicKey&
@@ -401,11 +487,11 @@ PrivateKey::getPublicKey() const
 const std::shared_ptr<PublicKey>&
 PrivateKey::getSharedPublicKey() const
 {
-    std::lock_guard<std::mutex> lock(publicKeyMutex_);
+    std::lock_guard lock(publicKeyMutex_);
     if (not publicKey_) {
         auto pk = std::make_shared<PublicKey>();
         if (auto err = gnutls_pubkey_import_privkey(pk->pk, key, GNUTLS_KEY_KEY_CERT_SIGN | GNUTLS_KEY_CRL_SIGN, 0))
-            throw CryptoException(std::string("Can't retreive public key: ") + gnutls_strerror(err));
+            throw CryptoException(std::string("Unable to retreive public key: ") + gnutls_strerror(err));
         publicKey_ = std::move(pk);
     }
     return publicKey_;
@@ -414,10 +500,11 @@ PrivateKey::getSharedPublicKey() const
 PublicKey::PublicKey()
 {
     if (auto err = gnutls_pubkey_init(&pk))
-        throw CryptoException(std::string("Can't initialize public key: ") + gnutls_strerror(err));
+        throw CryptoException(std::string("Unable to initialize public key: ") + gnutls_strerror(err));
 }
 
-PublicKey::PublicKey(const uint8_t* dat, size_t dat_size) : PublicKey()
+PublicKey::PublicKey(const uint8_t* dat, size_t dat_size)
+    : PublicKey()
 {
     unpack(dat, dat_size);
 }
@@ -462,7 +549,7 @@ PublicKey::pack(uint8_t* out, size_t* out_len) const
 void
 PublicKey::unpack(const uint8_t* data, size_t data_size)
 {
-    const gnutls_datum_t dat {(uint8_t*)data, (unsigned)data_size};
+    const gnutls_datum_t dat {(uint8_t*) data, (unsigned) data_size};
     int err = gnutls_pubkey_import(pk, &dat, GNUTLS_X509_FMT_PEM);
     if (err != GNUTLS_E_SUCCESS)
         err = gnutls_pubkey_import(pk, &dat, GNUTLS_X509_FMT_DER);
@@ -477,13 +564,19 @@ PublicKey::toString() const
         throw CryptoException(std::string("Could not print public key: null key"));
     std::string ret;
     size_t sz = ret.size();
-    int err = gnutls_pubkey_export(pk, GNUTLS_X509_FMT_PEM, (void*)ret.data(), &sz);
-    if (err ==  GNUTLS_E_SHORT_MEMORY_BUFFER) {
+    int err = gnutls_pubkey_export(pk, GNUTLS_X509_FMT_PEM, (void*) ret.data(), &sz);
+    if (err == GNUTLS_E_SHORT_MEMORY_BUFFER) {
         ret.resize(sz);
-        err = gnutls_pubkey_export(pk, GNUTLS_X509_FMT_PEM, (void*)ret.data(), &sz);
+        err = gnutls_pubkey_export(pk, GNUTLS_X509_FMT_PEM, (void*) ret.data(), &sz);
     }
     if (err != GNUTLS_E_SUCCESS)
         throw CryptoException(std::string("Could not print public key: ") + gnutls_strerror(err));
+    // GnuTLS reports the PEM size including the terminating null byte, which
+    // does not belong to the text and would end up embedded in whatever the
+    // string is copied into, such as the "owner" field of a serialized value.
+    ret.resize(sz);
+    if (not ret.empty() and ret.back() == '\0')
+        ret.pop_back();
     return ret;
 }
 
@@ -491,19 +584,20 @@ void
 PublicKey::msgpack_unpack(const msgpack::object& o)
 {
     if (o.type == msgpack::type::BIN)
-        unpack((const uint8_t*)o.via.bin.ptr, o.via.bin.size);
+        unpack((const uint8_t*) o.via.bin.ptr, o.via.bin.size);
     else {
         Blob dat = unpackBlob(o);
         unpack(dat.data(), dat.size());
     }
 }
 
-bool PublicKey::checkSignature(const uint8_t* data, size_t data_len, const uint8_t* signature, size_t signature_len) const
+bool
+PublicKey::checkSignature(const uint8_t* data, size_t data_len, const uint8_t* signature, size_t signature_len) const
 {
     if (!pk)
         return false;
-    const gnutls_datum_t sig {(uint8_t*)signature, (unsigned)signature_len};
-    const gnutls_datum_t dat {(uint8_t*)data, (unsigned)data_len};
+    const gnutls_datum_t sig {(uint8_t*) signature, (unsigned) signature_len};
+    const gnutls_datum_t dat {(uint8_t*) data, (unsigned) data_len};
     int rc = gnutls_pubkey_verify_data2(pk, GNUTLS_SIGN_RSA_SHA512, 0, &dat, &sig);
     return rc >= 0;
 }
@@ -511,11 +605,11 @@ bool PublicKey::checkSignature(const uint8_t* data, size_t data_len, const uint8
 void
 PublicKey::encryptBloc(const uint8_t* src, size_t src_size, uint8_t* dst, size_t dst_size) const
 {
-    const gnutls_datum_t key_dat {(uint8_t*)src, (unsigned)src_size};
+    const gnutls_datum_t key_dat {(uint8_t*) src, (unsigned) src_size};
     gnutls_datum_t encrypted {nullptr, 0};
     auto err = gnutls_pubkey_encrypt_data(pk, 0, &key_dat, &encrypted);
     if (err != GNUTLS_E_SUCCESS)
-        throw CryptoException(std::string("Can't encrypt data: ") + gnutls_strerror(err));
+        throw CryptoException(std::string("Unable to encrypt data: ") + gnutls_strerror(err));
     if (encrypted.size != dst_size)
         throw CryptoException("Unexpected cypherblock size");
     std::copy_n(encrypted.data, encrypted.size, dst);
@@ -526,18 +620,37 @@ Blob
 PublicKey::encrypt(const uint8_t* data, size_t data_len) const
 {
     if (!pk)
-        throw CryptoException("Can't read public key !");
+        throw CryptoException("Unable to read public key.");
 
     unsigned key_len = 0;
-    int err = gnutls_pubkey_get_pk_algorithm(pk, &key_len);
-    if (err < 0)
-        throw CryptoException("Can't read public key length !");
-    if (err != GNUTLS_PK_RSA)
+    int algo = gnutls_pubkey_get_pk_algorithm(pk, &key_len);
+    if (algo < 0)
+        throw CryptoException("Unable to read public key length.");
+    unsigned max_block_sz = 0;
+
+    if (algo == GNUTLS_PK_RSA) {
+        max_block_sz = key_len / 8 - 11;
+    }
+#if GNUTLS_VERSION_NUMBER >= 0x030804
+    else if (algo == GNUTLS_PK_RSA_OAEP) {
+        Spki spki(pk);
+        gnutls_digest_algorithm_t dig;
+        gnutls_datum_t label = {nullptr, 0};
+        if (gnutls_x509_spki_get_rsa_oaep_params(spki.get(), &dig, &label) < 0) {
+            throw CryptoException("Unable to get OAEP params");
+        }
+        size_t hash_size = gnutlsHashSize(dig);
+        if (hash_size == 0) {
+            throw CryptoException("Invalid digest algorithm for OAEP: GNUTLS_DIG_UNKNOWN");
+        }
+        max_block_sz = key_len / 8 - 2 * hash_size - 2 - label.size;
+    }
+#endif
+    else {
         throw CryptoException("Must be an RSA key");
+    }
 
-    const unsigned max_block_sz = key_len / 8 - 11;
     const unsigned cypher_block_sz = key_len / 8;
-
     /* Use plain RSA if the data is small enough */
     if (data_len <= max_block_sz) {
         Blob ret(cypher_block_sz);
@@ -574,9 +687,9 @@ PublicKey::getId() const
         InfoHash id;
         size_t sz = id.size();
         if (auto err = gnutls_pubkey_get_key_id(pk, 0, id.data(), &sz))
-            throw CryptoException(std::string("Can't get public key ID: ") + gnutls_strerror(err));
+            throw CryptoException(std::string("Unable to get public key ID: ") + gnutls_strerror(err));
         if (sz != id.size())
-            throw CryptoException("Can't get public key ID: wrong output length.");
+            throw CryptoException("Unable to get public key ID: incorrect output length.");
         cachedId_ = id;
         idCached_.store(true);
     }
@@ -590,9 +703,9 @@ PublicKey::getLongId() const
         PkId h;
         size_t sz = h.size();
         if (auto err = gnutls_pubkey_get_key_id(pk, GNUTLS_KEYID_USE_SHA256, h.data(), &sz))
-            throw CryptoException(std::string("Can't get 256 bits public key ID: ") + gnutls_strerror(err));
+            throw CryptoException(std::string("Unable to get 256-bit public key ID: ") + gnutls_strerror(err));
         if (sz != h.size())
-            throw CryptoException("Can't get 256 bits public key ID: wrong output length.");
+            throw CryptoException("Unable to get 256-bit public key ID: incorrect output length.");
         cachedLongId_ = h;
         longIdCached_.store(true);
     }
@@ -614,7 +727,7 @@ PublicKey::getPreferredDigest() const
 static NameType
 typeFromGnuTLS(gnutls_x509_subject_alt_name_t type)
 {
-    switch(type) {
+    switch (type) {
     case GNUTLS_SAN_DNSNAME:
         return NameType::DNS;
     case GNUTLS_SAN_RFC822NAME:
@@ -631,7 +744,7 @@ typeFromGnuTLS(gnutls_x509_subject_alt_name_t type)
 static gnutls_x509_subject_alt_name_t
 GnuTLSFromType(NameType type)
 {
-    switch(type) {
+    switch (type) {
     case NameType::DNS:
         return GNUTLS_SAN_DNSNAME;
     case NameType::RFC822:
@@ -641,7 +754,7 @@ GnuTLSFromType(NameType type)
     case NameType::IP:
         return GNUTLS_SAN_IPADDRESS;
     default:
-        return (gnutls_x509_subject_alt_name_t)0;
+        return (gnutls_x509_subject_alt_name_t) 0;
     }
 }
 
@@ -661,14 +774,15 @@ readDN(gnutls_x509_crq_t request, const char* oid)
 CertificateRequest::CertificateRequest()
 {
     if (auto err = gnutls_x509_crq_init(&request))
-        throw CryptoException(std::string("Can't initialize certificate request: ") + gnutls_strerror(err));
+        throw CryptoException(std::string("Unable to initialize certificate request: ") + gnutls_strerror(err));
 }
 
-CertificateRequest::CertificateRequest(const uint8_t* data, size_t size) : CertificateRequest()
+CertificateRequest::CertificateRequest(const uint8_t* data, size_t size)
+    : CertificateRequest()
 {
-    const gnutls_datum_t dat {(uint8_t*)data, (unsigned)size};
+    const gnutls_datum_t dat {(uint8_t*) data, (unsigned) size};
     if (auto err = gnutls_x509_crq_import(request, &dat, GNUTLS_X509_FMT_PEM))
-        throw CryptoException(std::string("Can't import certificate request: ") + gnutls_strerror(err));
+        throw CryptoException(std::string("Unable to import certificate request: ") + gnutls_strerror(err));
 }
 
 CertificateRequest::~CertificateRequest()
@@ -726,15 +840,15 @@ CertificateRequest::sign(const PrivateKey& key, const std::string& password)
     if (not password.empty())
         gnutls_x509_crq_set_challenge_password(request, password.c_str());
 
-    if (auto err = gnutls_x509_crq_set_key(request,  key.x509_key))
-        throw CryptoException(std::string("Can't set certificate request key: ") + gnutls_strerror(err));
+    if (auto err = gnutls_x509_crq_set_key(request, key.x509_key))
+        throw CryptoException(std::string("Unable to set certificate request key: ") + gnutls_strerror(err));
 
 #if GNUTLS_VERSION_NUMBER < 0x030601
     if (auto err = gnutls_x509_crq_privkey_sign(request, key.key, key.getPublicKey().getPreferredDigest(), 0))
-        throw CryptoException(std::string("Can't sign certificate request: ") + gnutls_strerror(err));
+        throw CryptoException(std::string("Unable to sign certificate request: ") + gnutls_strerror(err));
 #else
     if (auto err = gnutls_x509_crq_privkey_sign(request, key.key, GNUTLS_DIG_UNKNOWN, 0))
-        throw CryptoException(std::string("Can't sign certificate request: ") + gnutls_strerror(err));
+        throw CryptoException(std::string("Unable to sign certificate request: ") + gnutls_strerror(err));
 #endif
 }
 
@@ -749,7 +863,7 @@ CertificateRequest::pack() const
 {
     gnutls_datum_t dat {nullptr, 0};
     if (auto err = gnutls_x509_crq_export2(request, GNUTLS_X509_FMT_PEM, &dat))
-        throw CryptoException(std::string("Can't export certificate request: ") + gnutls_strerror(err));
+        throw CryptoException(std::string("Unable to export certificate request: ") + gnutls_strerror(err));
     Blob ret(dat.data, dat.data + dat.size);
     gnutls_free(dat.data);
     return ret;
@@ -760,7 +874,7 @@ CertificateRequest::toString() const
 {
     gnutls_datum_t dat {nullptr, 0};
     if (auto err = gnutls_x509_crq_export2(request, GNUTLS_X509_FMT_PEM, &dat))
-        throw CryptoException(std::string("Can't export certificate request: ") + gnutls_strerror(err));
+        throw CryptoException(std::string("Unable to export certificate request: ") + gnutls_strerror(err));
     std::string ret(dat.data, dat.data + dat.size);
     gnutls_free(dat.data);
     return ret;
@@ -772,12 +886,10 @@ static std::string
 readDN(gnutls_x509_crt_t cert, bool issuer = false)
 {
     gnutls_datum_t dn;
-    int err = issuer
-            ? gnutls_x509_crt_get_issuer_dn3(cert, &dn, 0)
-            : gnutls_x509_crt_get_dn3(       cert, &dn, 0);
+    int err = issuer ? gnutls_x509_crt_get_issuer_dn3(cert, &dn, 0) : gnutls_x509_crt_get_dn3(cert, &dn, 0);
     if (err != GNUTLS_E_SUCCESS)
         return {};
-    std::string ret((const char*)dn.data, dn.size);
+    std::string ret((const char*) dn.data, dn.size);
     gnutls_free(dn.data);
     return ret;
 }
@@ -788,9 +900,8 @@ readDN(gnutls_x509_crt_t cert, const char* oid, bool issuer = false)
     std::string dn;
     dn.resize(512);
     size_t dn_sz = dn.size();
-    int ret = issuer
-            ? gnutls_x509_crt_get_issuer_dn_by_oid(cert, oid, 0, 0, &(*dn.begin()), &dn_sz)
-            : gnutls_x509_crt_get_dn_by_oid(       cert, oid, 0, 0, &(*dn.begin()), &dn_sz);
+    int ret = issuer ? gnutls_x509_crt_get_issuer_dn_by_oid(cert, oid, 0, 0, &(*dn.begin()), &dn_sz)
+                     : gnutls_x509_crt_get_dn_by_oid(cert, oid, 0, 0, &(*dn.begin()), &dn_sz);
     if (ret != GNUTLS_E_SUCCESS)
         return {};
     dn.resize(dn_sz);
@@ -822,10 +933,18 @@ Certificate::unpack(const uint8_t* dat, size_t dat_size)
     }
     gnutls_x509_crt_t* cert_list;
     unsigned cert_num;
-    const gnutls_datum_t crt_dt {(uint8_t*)dat, (unsigned)dat_size};
-    int err = gnutls_x509_crt_list_import2(&cert_list, &cert_num, &crt_dt, GNUTLS_X509_FMT_PEM, GNUTLS_X509_CRT_LIST_FAIL_IF_UNSORTED);
+    const gnutls_datum_t crt_dt {(uint8_t*) dat, (unsigned) dat_size};
+    int err = gnutls_x509_crt_list_import2(&cert_list,
+                                           &cert_num,
+                                           &crt_dt,
+                                           GNUTLS_X509_FMT_PEM,
+                                           GNUTLS_X509_CRT_LIST_FAIL_IF_UNSORTED);
     if (err != GNUTLS_E_SUCCESS)
-        err = gnutls_x509_crt_list_import2(&cert_list, &cert_num, &crt_dt, GNUTLS_X509_FMT_DER, GNUTLS_X509_CRT_LIST_FAIL_IF_UNSORTED);
+        err = gnutls_x509_crt_list_import2(&cert_list,
+                                           &cert_num,
+                                           &crt_dt,
+                                           GNUTLS_X509_FMT_DER,
+                                           GNUTLS_X509_CRT_LIST_FAIL_IF_UNSORTED);
     if (err != GNUTLS_E_SUCCESS || cert_num == 0) {
         cert = nullptr;
         throw CryptoException(std::string("Could not read certificate - ") + gnutls_strerror(err));
@@ -845,7 +964,7 @@ void
 Certificate::msgpack_unpack(const msgpack::object& o)
 {
     if (o.type == msgpack::type::BIN)
-        unpack((const uint8_t*)o.via.bin.ptr, o.via.bin.size);
+        unpack((const uint8_t*) o.via.bin.ptr, o.via.bin.size);
     else {
         Blob dat = unpackBlob(o);
         unpack(dat.data(), dat.size());
@@ -887,11 +1006,11 @@ Certificate::getPublicKey() const
 const std::shared_ptr<PublicKey>&
 Certificate::getSharedPublicKey() const
 {
-    std::lock_guard<std::mutex> lock(publicKeyMutex_);
+    std::lock_guard lock(publicKeyMutex_);
     if (not publicKey_) {
         auto pk = std::make_shared<PublicKey>();
         if (auto err = gnutls_pubkey_import_x509(pk->pk, cert, 0))
-            throw CryptoException(std::string("Can't get certificate public key: ") + gnutls_strerror(err));
+            throw CryptoException(std::string("Unable to get certificate public key: ") + gnutls_strerror(err));
         publicKey_ = std::move(pk);
     }
     return publicKey_;
@@ -904,9 +1023,9 @@ Certificate::getId() const
         InfoHash id;
         size_t sz = id.size();
         if (auto err = gnutls_x509_crt_get_key_id(cert, 0, id.data(), &sz))
-            throw CryptoException(std::string("Can't get certificate public key ID: ") + gnutls_strerror(err));
+            throw CryptoException(std::string("Unable to get certificate public key ID: ") + gnutls_strerror(err));
         if (sz != id.size())
-            throw CryptoException("Can't get certificate public key ID: wrong output length.");
+            throw CryptoException("Unable to get certificate public key ID: incorrect output length.");
         cachedId_ = id;
         idCached_.store(true);
     }
@@ -920,9 +1039,10 @@ Certificate::getLongId() const
         PkId id;
         size_t sz = id.size();
         if (auto err = gnutls_x509_crt_get_key_id(cert, GNUTLS_KEYID_USE_SHA256, id.data(), &sz))
-            throw CryptoException(std::string("Can't get certificate 256 bits public key ID: ") + gnutls_strerror(err));
+            throw CryptoException(std::string("Unable to get certificate 256-bit public key ID: ")
+                                  + gnutls_strerror(err));
         if (sz != id.size())
-            throw CryptoException("Can't get certificate 256 bits public key ID: wrong output length.");
+            throw CryptoException("Unable to get certificate 256-bit public key ID: incorrect output length.");
         cachedLongId_ = id;
         longIdCached_.store(true);
     }
@@ -991,7 +1111,7 @@ Certificate::getAltNames() const
         if (ret == GNUTLS_E_REQUESTED_DATA_NOT_AVAILABLE)
             break;
         name.resize(name_sz);
-        names.emplace_back(typeFromGnuTLS((gnutls_x509_subject_alt_name_t)type), name);
+        names.emplace_back(typeFromGnuTLS((gnutls_x509_subject_alt_name_t) type), name);
     }
     return names;
 }
@@ -1043,7 +1163,7 @@ Certificate::print() const
 {
     gnutls_datum_t out {nullptr, 0};
     gnutls_x509_crt_print(cert, GNUTLS_CRT_PRINT_FULL, &out);
-    std::string ret(out.data, out.data+out.size);
+    std::string ret(out.data, out.data + out.size);
     gnutls_free(out.data);
     return ret;
 }
@@ -1078,7 +1198,7 @@ std::chrono::system_clock::time_point
 Certificate::getActivation() const
 {
     auto t = gnutls_x509_crt_get_activation_time(cert);
-    if (t == (time_t)-1)
+    if (t == (time_t) -1)
         return std::chrono::system_clock::time_point::min();
     return std::chrono::system_clock::from_time_t(t);
 }
@@ -1087,7 +1207,7 @@ std::chrono::system_clock::time_point
 Certificate::getExpiration() const
 {
     auto t = gnutls_x509_crt_get_expiration_time(cert);
-    if (t == (time_t)-1)
+    if (t == (time_t) -1)
         return std::chrono::system_clock::time_point::min();
     return std::chrono::system_clock::from_time_t(t);
 }
@@ -1110,7 +1230,7 @@ Certificate::generateOcspRequest(gnutls_x509_crt_t& issuer)
     if (err < 0)
         throw CryptoException(gnutls_strerror(err));
     Blob noncebuf(32);
-    gnutls_datum_t nonce = { noncebuf.data(), (unsigned)noncebuf.size() };
+    gnutls_datum_t nonce = {noncebuf.data(), (unsigned) noncebuf.size()};
     err = gnutls_rnd(GNUTLS_RND_NONCE, nonce.data, nonce.size);
     if (err < 0)
         throw CryptoException(gnutls_strerror(err));
@@ -1121,7 +1241,7 @@ Certificate::generateOcspRequest(gnutls_x509_crt_t& issuer)
     err = gnutls_ocsp_req_export(req.get(), &rdata);
     if (err != 0)
         throw CryptoException(gnutls_strerror(err));
-    std::string ret((char*)rdata.data, (char*)rdata.data + rdata.size);
+    std::string ret((char*) rdata.data, (char*) rdata.data + rdata.size);
     gnutls_free(rdata.data);
     return std::make_pair<std::string, Blob>(std::move(ret), std::move(noncebuf));
 }
@@ -1129,31 +1249,67 @@ Certificate::generateOcspRequest(gnutls_x509_crt_t& issuer)
 // PrivateKey
 
 PrivateKey
-PrivateKey::generate(unsigned key_length)
+PrivateKey::generate(unsigned key_length, gnutls_pk_algorithm_t algo)
 {
     gnutls_x509_privkey_t key;
     if (gnutls_x509_privkey_init(&key) != GNUTLS_E_SUCCESS)
-        throw CryptoException("Can't initialize private key.");
-    int err = gnutls_x509_privkey_generate(key, GNUTLS_PK_RSA, key_length, 0);
-    if (err != GNUTLS_E_SUCCESS) {
-        gnutls_x509_privkey_deinit(key);
-        throw CryptoException(std::string("Can't generate RSA key pair: ") + gnutls_strerror(err));
+        throw CryptoException("Unable to initialize private key.");
+    if (algo == GNUTLS_PK_RSA) {
+        int err = gnutls_x509_privkey_generate(key, algo, key_length, 0);
+        if (err != GNUTLS_E_SUCCESS) {
+            gnutls_x509_privkey_deinit(key);
+            throw CryptoException(std::string("Unable to generate RSA key pair: ") + gnutls_strerror(err));
+        }
     }
-    return PrivateKey{key};
+#if GNUTLS_VERSION_NUMBER >= 0x030804
+    else if (algo == GNUTLS_PK_RSA_OAEP) {
+        int err;
+        Spki spki;
+        err = gnutls_x509_spki_set_rsa_oaep_params(spki.get(), GNUTLS_DIG_SHA256, nullptr);
+        if (err != GNUTLS_E_SUCCESS) {
+            gnutls_x509_privkey_deinit(key);
+            throw CryptoException(std::string("Unable to set RSA-OAEP params: ") + gnutls_strerror(err));
+        }
+        /*gnutls_keygen_data_st params;
+        params.type = GNUTLS_KEYGEN_SPKI;
+        params.data = (uint8_t*)&spki.get();
+        params.size = spki.size();*/
+        err = gnutls_x509_privkey_generate2(key, algo, key_length, 0, nullptr, 0);
+        if (err != GNUTLS_E_SUCCESS) {
+            gnutls_x509_privkey_deinit(key);
+            throw CryptoException(std::string("Unable to generate RSA key pair: ") + gnutls_strerror(err));
+        }
+        err = gnutls_x509_privkey_set_spki(key, spki.get(), 0);
+        if (err != GNUTLS_E_SUCCESS) {
+            gnutls_x509_privkey_deinit(key);
+            throw CryptoException(std::string("Unable to set SPKI: ") + gnutls_strerror(err));
+        }
+    }
+#endif
+    else {
+        gnutls_x509_privkey_deinit(key);
+        throw CryptoException("Only RSA and RSA-OAEP keys are supported");
+    }
+    return PrivateKey {key};
 }
 
 PrivateKey
-PrivateKey::generateEC()
+PrivateKey::generateEC(gnutls_ecc_curve_t curve)
 {
     gnutls_x509_privkey_t key;
     if (gnutls_x509_privkey_init(&key) != GNUTLS_E_SUCCESS)
-        throw CryptoException("Can't initialize private key.");
-    int err = gnutls_x509_privkey_generate(key, GNUTLS_PK_EC, gnutls_sec_param_to_pk_bits(GNUTLS_PK_EC, GNUTLS_SEC_PARAM_ULTRA), 0);
+        throw CryptoException("Unable to initialize private key.");
+    int err = gnutls_x509_privkey_generate(key,
+                                           GNUTLS_PK_EC,
+                                           curve == GNUTLS_ECC_CURVE_INVALID
+                                               ? gnutls_sec_param_to_pk_bits(GNUTLS_PK_EC, GNUTLS_SEC_PARAM_ULTRA)
+                                               : GNUTLS_CURVE_TO_BITS(curve),
+                                           0);
     if (err != GNUTLS_E_SUCCESS) {
         gnutls_x509_privkey_deinit(key);
-        throw CryptoException(std::string("Can't generate EC key pair: ") + gnutls_strerror(err));
+        throw CryptoException(std::string("Unable to generate EC key pair: ") + gnutls_strerror(err));
     }
-    return PrivateKey{key};
+    return PrivateKey {key};
 }
 
 Identity
@@ -1164,9 +1320,9 @@ generateIdentity(const std::string& name, const Identity& ca, unsigned key_lengt
     return {std::move(key), std::move(cert)};
 }
 
-
 Identity
-generateIdentity(const std::string& name, const Identity& ca, unsigned key_length) {
+generateIdentity(const std::string& name, const Identity& ca, unsigned key_length)
+{
     return generateIdentity(name, ca, key_length, !ca.first || !ca.second);
 }
 
@@ -1179,7 +1335,8 @@ generateEcIdentity(const std::string& name, const Identity& ca, bool is_ca)
 }
 
 Identity
-generateEcIdentity(const std::string& name, const Identity& ca) {
+generateEcIdentity(const std::string& name, const Identity& ca)
+{
     return generateEcIdentity(name, ca, !ca.first || !ca.second);
 }
 
@@ -1189,7 +1346,7 @@ saveIdentity(const Identity& id, const std::string& path, const std::string& pri
     {
         auto ca_key_data = id.first->serialize(privkey_password);
         std::ofstream key_file(path + ".pem");
-        key_file.write((char*)ca_key_data.data(), ca_key_data.size());
+        key_file.write((char*) ca_key_data.data(), ca_key_data.size());
         // Throw error if the file is not written
         if (!key_file)
             throw CryptoException("Could not write private key file");
@@ -1197,19 +1354,18 @@ saveIdentity(const Identity& id, const std::string& path, const std::string& pri
     {
         auto ca_key_data = id.second->getPacked();
         std::ofstream crt_file(path + ".crt");
-        crt_file.write((char*)ca_key_data.data(), ca_key_data.size());
+        crt_file.write((char*) ca_key_data.data(), ca_key_data.size());
         // Throw error if the file is not written
         if (!crt_file)
             throw CryptoException("Could not write certificate file");
     }
 }
 
-Identity 
-loadIdentity(const std::string &path,const std::string &privkey_password)
+Identity
+loadIdentity(const std::string& path, const std::string& privkey_password)
 {
     std::ifstream pkStream(path + ".pem", std::ios::in | std::ios::binary);
-    std::vector<uint8_t> pkContent((std::istreambuf_iterator<char>(pkStream)),
-                                    std::istreambuf_iterator<char>());
+    std::vector<uint8_t> pkContent((std::istreambuf_iterator<char>(pkStream)), std::istreambuf_iterator<char>());
     auto key = std::make_shared<PrivateKey>(pkContent, privkey_password);
     pkStream.close();
     // Create a certificate
@@ -1247,9 +1403,12 @@ void
 setRandomSerial(gnutls_x509_crt_t cert)
 {
     std::random_device rdev;
-    std::uniform_int_distribution<int64_t> dist{1};
-    int64_t cert_serial = dist(rdev);
-    gnutls_x509_crt_set_serial(cert, &cert_serial, sizeof(cert_serial));
+    std::uniform_int_distribution<int64_t> dist {1};
+    const auto cert_serial = dist(rdev);
+    std::array<uint8_t, sizeof(cert_serial)> packed_serial;
+    for (size_t i = 0; i < packed_serial.size(); i++)
+        packed_serial[i] = cert_serial >> (8 * (packed_serial.size() - 1 - i));
+    gnutls_x509_crt_set_serial(cert, packed_serial.data(), packed_serial.size());
 }
 
 Certificate
@@ -1274,16 +1433,16 @@ Certificate::generate(const PrivateKey& key, const std::string& name, const Iden
     const std::string uid_str = pk_id.toString();
 
     int err = gnutls_x509_crt_set_subject_key_id(cert, &pk_id, sizeof(pk_id));
-    if(err) {
+    if (err) {
         throw CryptoException(std::string("Error when setting subject key id ") + gnutls_strerror(err));
     }
 
     err = gnutls_x509_crt_set_dn_by_oid(cert, GNUTLS_OID_X520_COMMON_NAME, 0, name.data(), name.length());
-    if(err) {
+    if (err) {
         throw CryptoException(std::string("Error when setting subject key id ") + gnutls_strerror(err));
     }
     err = gnutls_x509_crt_set_dn_by_oid(cert, GNUTLS_OID_LDAP_UID, 0, uid_str.data(), uid_str.length());
-    if(err) {
+    if (err) {
         throw CryptoException(std::string("Error when setting dn by oid ") + gnutls_strerror(err));
     }
 
@@ -1292,7 +1451,7 @@ Certificate::generate(const PrivateKey& key, const std::string& name, const Iden
     unsigned key_usage = 0;
     if (is_ca) {
         err = gnutls_x509_crt_set_ca_status(cert, 1);
-        if(err) {
+        if (err) {
             throw CryptoException(std::string("Error when setting ca status ") + gnutls_strerror(err));
         }
         key_usage |= GNUTLS_KEY_KEY_CERT_SIGN | GNUTLS_KEY_CRL_SIGN;
@@ -1300,7 +1459,7 @@ Certificate::generate(const PrivateKey& key, const std::string& name, const Iden
         key_usage |= GNUTLS_KEY_DIGITAL_SIGNATURE | GNUTLS_KEY_DATA_ENCIPHERMENT;
     }
     err = gnutls_x509_crt_set_key_usage(cert, key_usage);
-    if(err) {
+    if (err) {
         throw CryptoException(std::string("Error when setting ca status ") + gnutls_strerror(err));
     }
 
@@ -1328,20 +1487,21 @@ Certificate::generate(const CertificateRequest& request, const Identity& ca, int
 {
     gnutls_x509_crt_t cert;
     if (auto err = gnutls_x509_crt_init(&cert))
-        throw CryptoException(std::string("Can't initialize certificate: ") + gnutls_strerror(err));
+        throw CryptoException(std::string("Unable to initialize certificate: ") + gnutls_strerror(err));
     Certificate ret {cert};
     if (auto err = gnutls_x509_crt_set_crq(cert, request.get()))
-        throw CryptoException(std::string("Can't initialize certificate: ") + gnutls_strerror(err));
+        throw CryptoException(std::string("Unable to initialize certificate: ") + gnutls_strerror(err));
 
     if (auto err = gnutls_x509_crt_set_version(cert, 3)) {
-        throw CryptoException(std::string("Can't set certificate version: ") + gnutls_strerror(err));
+        throw CryptoException(std::string("Unable to set certificate version: ") + gnutls_strerror(err));
     }
 
     setValidityPeriod(cert, validity <= 0 ? 10 * 365 * 24 * 60 * 60 : validity);
     setRandomSerial(cert);
 
-    if (auto err = gnutls_x509_crt_privkey_sign(cert, ca.second->cert, ca.first->key, ca.second->getPreferredDigest(), 0)) {
-        throw CryptoException(std::string("Can't sign certificate: ") + gnutls_strerror(err));
+    if (auto err
+        = gnutls_x509_crt_privkey_sign(cert, ca.second->cert, ca.first->key, ca.second->getPreferredDigest(), 0)) {
+        throw CryptoException(std::string("Unable to sign certificate: ") + gnutls_strerror(err));
     }
     ret.issuer = ca.second;
 
@@ -1357,7 +1517,8 @@ Certificate::setValidity(const Identity& ca, int64_t validity)
         if (not ca.second->isCA()) {
             throw CryptoException("Signing certificate must be CA");
         }
-        if (int err = gnutls_x509_crt_privkey_sign(cert, ca.second->cert, ca.first->key, ca.second->getPreferredDigest(), 0)) {
+        if (int err
+            = gnutls_x509_crt_privkey_sign(cert, ca.second->cert, ca.first->key, ca.second->getPreferredDigest(), 0)) {
             throw CryptoException(std::string("Error when signing certificate ") + gnutls_strerror(err));
         }
     }
@@ -1391,9 +1552,9 @@ OcspRequest::OcspRequest(const uint8_t* dat_ptr, size_t dat_size)
     int ret = gnutls_ocsp_req_init(&request);
     if (ret < 0)
         throw CryptoException(gnutls_strerror(ret));
-    gnutls_datum_t dat = {(unsigned char*)dat_ptr,(unsigned int)dat_size};
+    gnutls_datum_t dat = {(unsigned char*) dat_ptr, (unsigned int) dat_size};
     ret = gnutls_ocsp_req_import(request, &dat);
-    if (ret < 0){
+    if (ret < 0) {
         gnutls_ocsp_req_deinit(request);
         throw CryptoException(gnutls_strerror(ret));
     }
@@ -1416,7 +1577,7 @@ OcspRequest::toString(const bool compact) const
 
     std::string str;
     if (ret == 0) {
-        str = std::string((const char*)dat.data, (size_t)dat.size);
+        str = std::string((const char*) dat.data, (size_t) dat.size);
         gnutls_free(dat.data);
     } else
         throw CryptoException(gnutls_strerror(ret));
@@ -1455,9 +1616,9 @@ OcspResponse::OcspResponse(const uint8_t* dat_ptr, size_t dat_size)
     int ret = gnutls_ocsp_resp_init(&response);
     if (ret < 0)
         throw CryptoException(gnutls_strerror(ret));
-    gnutls_datum_t dat = {(unsigned char*)dat_ptr,(unsigned int)dat_size};
+    gnutls_datum_t dat = {(unsigned char*) dat_ptr, (unsigned int) dat_size};
     ret = gnutls_ocsp_resp_import(response, &dat);
-    if (ret < 0){
+    if (ret < 0) {
         gnutls_ocsp_resp_deinit(response);
         throw CryptoException(gnutls_strerror(ret));
     }
@@ -1488,13 +1649,12 @@ OcspResponse::toString(const bool compact) const
     gnutls_datum_t dat {nullptr, 0};
     ret = gnutls_ocsp_resp_print(response, compact ? GNUTLS_OCSP_PRINT_COMPACT : GNUTLS_OCSP_PRINT_FULL, &dat);
     if (ret == 0)
-        str = std::string((const char*)dat.data, (size_t)dat.size);
+        str = std::string((const char*) dat.data, (size_t) dat.size);
     gnutls_free(dat.data);
     if (ret < 0)
         throw CryptoException(gnutls_strerror(ret));
     return str;
 }
-
 
 gnutls_ocsp_cert_status_t
 OcspResponse::getCertificateStatus() const
@@ -1503,16 +1663,16 @@ OcspResponse::getCertificateStatus() const
     unsigned int status;
     // MSVC/vcpkg GnuTLS cast workaround
 #if _WIN32 && (GNUTLS_VERSION_NUMBER == 0x030807)
-    ret = gnutls_ocsp_resp_get_single(response, 
-                                      0, 
-                                      NULL, 
-                                      NULL, 
-                                      NULL, 
-                                      NULL, 
-                                      reinterpret_cast<gnutls_ocsp_cert_status_t*>(& status), 
-                                      NULL, 
-                                      NULL, 
-                                      NULL, 
+    ret = gnutls_ocsp_resp_get_single(response,
+                                      0,
+                                      NULL,
+                                      NULL,
+                                      NULL,
+                                      NULL,
+                                      reinterpret_cast<gnutls_ocsp_cert_status_t*>(&status),
+                                      NULL,
+                                      NULL,
+                                      NULL,
                                       NULL);
 #else
     ret = gnutls_ocsp_resp_get_single(response, 0, NULL, NULL, NULL, NULL, &status, NULL, NULL, NULL, NULL);
@@ -1529,7 +1689,7 @@ OcspResponse::verifyDirect(const Certificate& crt, const Blob& nonce)
     int ret = gnutls_ocsp_resp_get_status(response);
     if (ret < 0)
         throw CryptoException(gnutls_strerror(ret));
-    gnutls_ocsp_resp_status_t status = (gnutls_ocsp_resp_status_t)ret;
+    gnutls_ocsp_resp_status_t status = (gnutls_ocsp_resp_status_t) ret;
     if (status != GNUTLS_OCSP_RESP_SUCCESSFUL)
         throw CryptoException("OCSP request unsuccessful: " + std::to_string(ret));
 
@@ -1539,7 +1699,7 @@ OcspResponse::verifyDirect(const Certificate& crt, const Blob& nonce)
         ret = gnutls_ocsp_resp_get_nonce(response, NULL, &rnonce);
         if (ret < 0)
             throw CryptoException(gnutls_strerror(ret));
-        if (rnonce.size != nonce.size() || memcmp(nonce.data(), rnonce.data, nonce.size()) != 0){
+        if (rnonce.size != nonce.size() || memcmp(nonce.data(), rnonce.data, nonce.size()) != 0) {
             gnutls_free(rnonce.data);
             throw CryptoException(gnutls_strerror(GNUTLS_E_OCSP_RESPONSE_ERROR));
         }
@@ -1577,23 +1737,23 @@ OcspResponse::verifyDirect(const Certificate& crt, const Blob& nonce)
     unsigned int status_ocsp;
     // MSVC/vcpkg GnuTLS cast workaround
 #if _WIN32 && (GNUTLS_VERSION_NUMBER == 0x030807)
-    ret = gnutls_ocsp_resp_get_single(response, 
-                                      0, 
-                                      NULL, 
-                                      NULL, 
-                                      NULL, 
-                                      NULL, 
-                                      reinterpret_cast<gnutls_ocsp_cert_status_t*>(& status_ocsp), 
-                                      NULL, 
-                                      NULL, 
-                                      NULL, 
+    ret = gnutls_ocsp_resp_get_single(response,
+                                      0,
+                                      NULL,
+                                      NULL,
+                                      NULL,
+                                      NULL,
+                                      reinterpret_cast<gnutls_ocsp_cert_status_t*>(&status_ocsp),
+                                      NULL,
+                                      NULL,
+                                      NULL,
                                       NULL);
 #else
     ret = gnutls_ocsp_resp_get_single(response, 0, NULL, NULL, NULL, NULL, &status_ocsp, NULL, NULL, NULL, NULL);
 #endif
     if (ret < 0)
         throw CryptoException(gnutls_strerror(ret));
-    return (gnutls_ocsp_cert_status_t)status_ocsp;
+    return (gnutls_ocsp_cert_status_t) status_ocsp;
 }
 
 // RevocationList
@@ -1628,7 +1788,7 @@ RevocationList::pack(Blob& b) const
 {
     gnutls_datum_t gdat {nullptr, 0};
     if (auto err = gnutls_x509_crl_export2(crl, GNUTLS_X509_FMT_DER, &gdat)) {
-        throw CryptoException(std::string("Can't export CRL: ") + gnutls_strerror(err));
+        throw CryptoException(std::string("Unable to export CRL: ") + gnutls_strerror(err));
     }
     b.insert(b.end(), gdat.data, gdat.data + gdat.size);
     gnutls_free(gdat.data);
@@ -1638,12 +1798,12 @@ void
 RevocationList::unpack(const uint8_t* dat, size_t dat_size)
 {
     if (std::numeric_limits<unsigned>::max() < dat_size)
-        throw CryptoException("Can't load CRL: too large!");
-    const gnutls_datum_t gdat {(uint8_t*)dat, (unsigned)dat_size};
+        throw CryptoException("Unable to load CRL: too large.");
+    const gnutls_datum_t gdat {(uint8_t*) dat, (unsigned) dat_size};
     if (auto err_pem = gnutls_x509_crl_import(crl, &gdat, GNUTLS_X509_FMT_PEM))
         if (auto err_der = gnutls_x509_crl_import(crl, &gdat, GNUTLS_X509_FMT_DER)) {
-            throw CryptoException(std::string("Can't load CRL: PEM: ") + gnutls_strerror(err_pem)
-                                                           + " DER: "  + gnutls_strerror(err_der));
+            throw CryptoException(std::string("Unable to load CRL: PEM: ") + gnutls_strerror(err_pem)
+                                  + " DER: " + gnutls_strerror(err_der));
         }
 }
 
@@ -1652,7 +1812,7 @@ RevocationList::msgpack_unpack(const msgpack::object& o)
 {
     try {
         if (o.type == msgpack::type::BIN)
-            unpack((const uint8_t*)o.via.bin.ptr, o.via.bin.size);
+            unpack((const uint8_t*) o.via.bin.ptr, o.via.bin.size);
         else {
             Blob dat = unpackBlob(o);
             unpack(dat.data(), dat.size());
@@ -1667,7 +1827,7 @@ RevocationList::isRevoked(const Certificate& crt) const
 {
     auto ret = gnutls_x509_crt_check_revocation(crt.cert, &crl, 1);
     if (ret < 0)
-        throw CryptoException(std::string("Can't check certificate revocation status: ") + gnutls_strerror(ret));
+        throw CryptoException(std::string("Unable to check certificate revocation status: ") + gnutls_strerror(ret));
     return ret != 0;
 }
 
@@ -1677,7 +1837,7 @@ RevocationList::revoke(const Certificate& crt, std::chrono::system_clock::time_p
     if (t == time_point::min())
         t = clock::now();
     if (auto err = gnutls_x509_crl_set_crt(crl, crt.cert, std::chrono::system_clock::to_time_t(t)))
-        throw CryptoException(std::string("Can't revoke certificate: ") + gnutls_strerror(err));
+        throw CryptoException(std::string("Unable to revoke certificate: ") + gnutls_strerror(err));
 }
 
 static std::string
@@ -1710,7 +1870,7 @@ RevocationList::time_point
 RevocationList::getNextUpdateTime() const
 {
     auto t = gnutls_x509_crl_get_next_update(crl);
-    if (t == (time_t)-1)
+    if (t == (time_t) -1)
         return std::chrono::system_clock::time_point::min();
     return std::chrono::system_clock::from_time_t(t);
 }
@@ -1719,62 +1879,46 @@ RevocationList::time_point
 RevocationList::getUpdateTime() const
 {
     auto t = gnutls_x509_crl_get_this_update(crl);
-    if (t == (time_t)-1)
+    if (t == (time_t) -1)
         return std::chrono::system_clock::time_point::min();
     return std::chrono::system_clock::from_time_t(t);
 }
 
-enum class Endian : uint32_t
-{
-    LITTLE = 0,
-    BIG = 1
-};
-
-template <typename T>
-T endian(T w, Endian endian = Endian::BIG)
-{
-    // this gets optimized out into if (endian == host_endian) return w;
-    union { uint64_t quad; uint32_t islittle; } t;
-    t.quad = 1;
-    if (t.islittle ^ (uint32_t)endian) return w;
-    T r = 0;
-
-    // decent compilers will unroll this (gcc)
-    // or even convert straight into single bswap (clang)
-    for (size_t i = 0; i < sizeof(r); i++) {
-        r <<= 8;
-        r |= w & 0xff;
-        w >>= 8;
-    }
-    return r;
-}
-
 void
-RevocationList::sign(const PrivateKey& key, const Certificate& ca, duration validity)
+RevocationList::sign(const PrivateKey& key, const Certificate& ca, duration validity, uint64_t crlNumber)
 {
     if (auto err = gnutls_x509_crl_set_version(crl, 2))
-        throw CryptoException(std::string("Can't set CRL version: ") + gnutls_strerror(err));
+        throw CryptoException(std::string("Unable to set CRL version: ") + gnutls_strerror(err));
     auto now = std::chrono::system_clock::now();
-    auto next_update = (validity == duration{}) ? ca.getExpiration() : now + validity;
+    auto next_update = (validity == duration {}) ? ca.getExpiration() : now + validity;
     if (auto err = gnutls_x509_crl_set_this_update(crl, std::chrono::system_clock::to_time_t(now)))
-        throw CryptoException(std::string("Can't set CRL update time: ") + gnutls_strerror(err));
+        throw CryptoException(std::string("Unable to set CRL update time: ") + gnutls_strerror(err));
     if (auto err = gnutls_x509_crl_set_next_update(crl, std::chrono::system_clock::to_time_t(next_update)))
-        throw CryptoException(std::string("Can't set CRL next update time: ") + gnutls_strerror(err));
-    uint64_t number {0};
-    size_t number_sz {sizeof(number)};
-    unsigned critical {0};
-    gnutls_x509_crl_get_number(crl, &number, &number_sz, &critical);
+        throw CryptoException(std::string("Unable to set CRL next update time: ") + gnutls_strerror(err));
+    uint64_t number {crlNumber};
     if (number == 0) {
-        // initialize to a random number
-        number_sz = sizeof(number);
-        std::random_device rdev;
-        std::generate_n((uint8_t*)&number, sizeof(number), std::bind(rand_byte, std::ref(rdev)));
-    } else
-        number = endian(endian(number) + 1);
-    if (auto err = gnutls_x509_crl_set_number(crl, &number, sizeof(number)))
-        throw CryptoException(std::string("Can't set CRL update time: ") + gnutls_strerror(err));
+        // The CRL Number extension holds a DER integer of variable length, so it must be
+        // read as a big-endian byte string rather than straight into an uint64_t.
+        auto current = getNumber();
+        for (uint8_t byte : current)
+            number = (number << 8) | byte;
+        if (number == 0) {
+            // Initialize to a random number.
+            std::random_device rdev;
+            do {
+                std::generate_n((uint8_t*) &number, sizeof(number), std::bind(rand_byte, std::ref(rdev)));
+            } while (number == 0);
+        } else
+            number++;
+    }
+    // Store the number in network byte order.
+    uint8_t packedNumber[sizeof(number)];
+    for (size_t i = 0; i < sizeof(packedNumber); i++)
+        packedNumber[i] = (uint8_t) ((number >> (8 * (sizeof(packedNumber) - 1 - i))) & 0xff);
+    if (auto err = gnutls_x509_crl_set_number(crl, packedNumber, sizeof(packedNumber)))
+        throw CryptoException(std::string("Unable to set CRL number: ") + gnutls_strerror(err));
     if (auto err = gnutls_x509_crl_sign2(crl, ca.cert, key.x509_key, GNUTLS_DIG_SHA512, 0))
-        throw CryptoException(std::string("Can't sign certificate revocation list: ") + gnutls_strerror(err));
+        throw CryptoException(std::string("Unable to sign certificate revocation list: ") + gnutls_strerror(err));
     // to be able to actually use the CRL we need to serialize/deserialize it
     auto packed = getPacked();
     unpack(packed.data(), packed.size());
@@ -1786,12 +1930,11 @@ RevocationList::isSignedBy(const Certificate& issuer) const
     unsigned result {0};
     auto err = gnutls_x509_crl_verify(crl, &issuer.cert, 1, 0, &result);
     if (err < 0) {
-        //std::cout << "Can't verify CRL: " << err << " " << result << " " << gnutls_strerror(err) << std::endl;
+        // std::cout << "Unable to verify CRL: " << err << " " << result << " " << gnutls_strerror(err) << std::endl;
         return false;
     }
     return result == 0;
 }
-
 
 Blob
 RevocationList::getNumber() const
@@ -1810,18 +1953,20 @@ RevocationList::toString() const
 {
     gnutls_datum_t out {nullptr, 0};
     gnutls_x509_crl_print(crl, GNUTLS_CRT_PRINT_FULL, &out);
-    std::string ret(out.data, out.data+out.size);
+    std::string ret(out.data, out.data + out.size);
     gnutls_free(out.data);
     return ret;
 }
 
 // TrustList
 
-TrustList::TrustList() {
+TrustList::TrustList()
+{
     gnutls_x509_trust_list_init(&trust, 0);
 }
 
-TrustList::~TrustList() {
+TrustList::~TrustList()
+{
     gnutls_x509_trust_list_deinit(trust, 1);
 }
 
@@ -1835,24 +1980,28 @@ TrustList::operator=(TrustList&& o) noexcept
     return *this;
 }
 
-void TrustList::add(const Certificate& crt)
+void
+TrustList::add(const Certificate& crt)
 {
     auto chain = crt.getChainWithRevocations(true);
     gnutls_x509_trust_list_add_cas(trust, chain.first.data(), chain.first.size(), GNUTLS_TL_NO_DUPLICATES);
     if (not chain.second.empty())
-        gnutls_x509_trust_list_add_crls(
-                trust,
-                chain.second.data(), chain.second.size(),
-                GNUTLS_TL_VERIFY_CRL | GNUTLS_TL_NO_DUPLICATES, 0);
+        gnutls_x509_trust_list_add_crls(trust,
+                                        chain.second.data(),
+                                        chain.second.size(),
+                                        GNUTLS_TL_VERIFY_CRL | GNUTLS_TL_NO_DUPLICATES,
+                                        0);
 }
 
-void TrustList::add(const RevocationList& crl)
+void
+TrustList::add(const RevocationList& crl)
 {
     auto copy = crl.getCopy();
     gnutls_x509_trust_list_add_crls(trust, &copy, 1, GNUTLS_TL_VERIFY_CRL | GNUTLS_TL_NO_DUPLICATES, 0);
 }
 
-void TrustList::remove(const Certificate& crt, bool parents)
+void
+TrustList::remove(const Certificate& crt, bool parents)
 {
     gnutls_x509_trust_list_remove_cas(trust, &crt.cert, 1);
     if (parents) {
@@ -1866,12 +2015,14 @@ TrustList::verify(const Certificate& crt) const
 {
     auto chain = crt.getChain();
     VerifyResult ret;
-    ret.ret = gnutls_x509_trust_list_verify_crt2(
-        trust,
-        chain.data(), chain.size(),
-        nullptr, 0,
-        GNUTLS_PROFILE_TO_VFLAGS(GNUTLS_PROFILE_MEDIUM),
-        &ret.result, nullptr);
+    ret.ret = gnutls_x509_trust_list_verify_crt2(trust,
+                                                 chain.data(),
+                                                 chain.size(),
+                                                 nullptr,
+                                                 0,
+                                                 GNUTLS_PROFILE_TO_VFLAGS(GNUTLS_PROFILE_MEDIUM),
+                                                 &ret.result,
+                                                 nullptr);
     return ret;
 }
 
@@ -1883,7 +2034,8 @@ TrustList::VerifyResult::toString() const
     return ss.str();
 }
 
-std::ostream& operator<< (std::ostream& o, const TrustList::VerifyResult& h)
+std::ostream&
+operator<<(std::ostream& o, const TrustList::VerifyResult& h)
 {
     if (h.ret < 0) {
         o << "Error verifying certificate: " << gnutls_strerror(h.ret) << std::endl;
@@ -1917,5 +2069,216 @@ std::ostream& operator<< (std::ostream& o, const TrustList::VerifyResult& h)
     return o;
 }
 
+// check for GnuTLS 3.8.2+:
+
+#if GNUTLS_VERSION_NUMBER >= 0x030802
+
+static Blob
+hkdf_extract(const Blob& salt, const Blob& ikm)
+{
+    struct hmac_sha256_ctx ctx;
+    hmac_sha256_set_key(&ctx, salt.size(), salt.data());
+    hmac_sha256_update(&ctx, ikm.size(), ikm.data());
+    Blob prk(SHA256_DIGEST_SIZE);
+    hmacSha256Digest(&ctx, prk.data());
+    return prk;
 }
+
+static Blob
+hkdf_expand(const Blob& prk, const uint8_t* info, size_t info_len, size_t len)
+{
+    struct hmac_sha256_ctx ctx;
+    Blob okm;
+    okm.reserve(len);
+    Blob T;
+    uint8_t i = 1;
+    hmac_sha256_set_key(&ctx, prk.size(), prk.data());
+    while (okm.size() < len) {
+        hmac_sha256_update(&ctx, T.size(), T.data());
+        hmac_sha256_update(&ctx, info_len, info);
+        hmac_sha256_update(&ctx, 1, &i);
+        T.resize(SHA256_DIGEST_SIZE);
+        hmacSha256Digest(&ctx, T.data());
+        okm.insert(okm.end(), T.begin(), T.end());
+        i++;
+    }
+    okm.resize(len);
+    return okm;
 }
+#endif
+
+Blob
+webPushEncrypt(const Blob& p256dh,
+               const Blob& auth,
+               const uint8_t* payload,
+               size_t payload_length,
+               const PrivateKey& privKey,
+               const Blob& salt_in)
+{
+#if GNUTLS_VERSION_NUMBER < 0x030802
+    throw CryptoException("webPushEncrypt requires GnuTLS 3.8.2 or newer");
+#else
+    // 1. Generate Salt
+    Blob salt;
+    if (salt_in.empty()) {
+        salt.resize(16);
+        std::random_device rdev;
+        std::generate_n(salt.begin(), salt.size(), std::bind(rand_byte, std::ref(rdev)));
+    } else {
+        salt = salt_in;
+    }
+
+    // 2. Generate Ephemeral Key Pair
+    gnutls_privkey_t eph_key = nullptr;
+    bool own_key = false;
+
+    if (privKey.key) {
+        eph_key = privKey.key;
+    } else {
+        if (gnutls_privkey_init(&eph_key) != GNUTLS_E_SUCCESS)
+            throw CryptoException("Failed to init ephemeral key");
+        if (gnutls_privkey_generate(eph_key, GNUTLS_PK_ECC, GNUTLS_CURVE_TO_BITS(GNUTLS_ECC_CURVE_SECP256R1), 0)
+            != GNUTLS_E_SUCCESS) {
+            gnutls_privkey_deinit(eph_key);
+            throw CryptoException("Failed to generate ephemeral key");
+        }
+        own_key = true;
+    }
+
+    gnutls_ecc_curve_t curve;
+    gnutls_datum_t x, y, k;
+    if (gnutls_privkey_export_ecc_raw(eph_key, &curve, &x, &y, &k) != GNUTLS_E_SUCCESS) {
+        if (own_key)
+            gnutls_privkey_deinit(eph_key);
+        throw CryptoException("Failed to export ephemeral key");
+    }
+    if (curve != GNUTLS_ECC_CURVE_SECP256R1) {
+        gnutls_free(x.data);
+        gnutls_free(y.data);
+        gnutls_free(k.data);
+        if (own_key)
+            gnutls_privkey_deinit(eph_key);
+        throw CryptoException("Ephemeral key has invalid curve");
+    }
+
+    // Construct local public key (uncompressed)
+    Blob local_pub(65);
+    local_pub[0] = 0x04;
+
+    auto copy_coord = [](uint8_t* dest, const gnutls_datum_t& src) {
+        if (src.size > 32 && (src.size != 33 || src.data[0] != 0))
+            throw CryptoException("Invalid ephemeral key coordinate size: " + std::to_string(src.size));
+        size_t offset = src.size > 32 ? 1 : 0;
+        size_t len = src.size - offset;
+        std::memset(dest, 0, 32 - len);
+        std::memcpy(dest + (32 - len), src.data + offset, len);
+    };
+
+    try {
+        copy_coord(local_pub.data() + 1, x);
+        copy_coord(local_pub.data() + 33, y);
+    } catch (...) {
+        gnutls_free(x.data);
+        gnutls_free(y.data);
+        gnutls_free(k.data);
+        if (own_key)
+            gnutls_privkey_deinit(eph_key);
+        throw;
+    }
+
+    gnutls_free(x.data);
+    gnutls_free(y.data);
+    gnutls_free(k.data);
+
+    // 3. Compute Shared Secret
+    if (p256dh.size() != 65 || p256dh[0] != 0x04) {
+        if (own_key)
+            gnutls_privkey_deinit(eph_key);
+        throw CryptoException("Invalid peer public key");
+    }
+
+    gnutls_pubkey_t peer_pub;
+    if (gnutls_pubkey_init(&peer_pub) != GNUTLS_E_SUCCESS) {
+        if (own_key)
+            gnutls_privkey_deinit(eph_key);
+        throw CryptoException("Failed to init peer public key");
+    }
+
+    gnutls_datum_t peer_x = {(unsigned char*) p256dh.data() + 1, 32};
+    gnutls_datum_t peer_y = {(unsigned char*) p256dh.data() + 33, 32};
+
+    if (gnutls_pubkey_import_ecc_raw(peer_pub, GNUTLS_ECC_CURVE_SECP256R1, &peer_x, &peer_y) != GNUTLS_E_SUCCESS) {
+        gnutls_pubkey_deinit(peer_pub);
+        if (own_key)
+            gnutls_privkey_deinit(eph_key);
+        throw CryptoException("Failed to import peer public key");
+    }
+
+    gnutls_datum_t secret;
+    if (gnutls_privkey_derive_secret(eph_key, peer_pub, NULL, &secret, 0) != GNUTLS_E_SUCCESS) {
+        gnutls_pubkey_deinit(peer_pub);
+        if (own_key)
+            gnutls_privkey_deinit(eph_key);
+        throw CryptoException("Failed to derive shared secret");
+    }
+
+    Blob shared_secret(secret.data, secret.data + secret.size);
+    gnutls_free(secret.data);
+    gnutls_pubkey_deinit(peer_pub);
+    if (own_key)
+        gnutls_privkey_deinit(eph_key);
+
+    // 4. HKDF
+    static constexpr char INFO_STR[] = "WebPush: info";
+    static constexpr char CEK_STR[] = "Content-Encoding: aes128gcm";
+    static constexpr char NONCE_STR[] = "Content-Encoding: nonce";
+
+    Blob prk_key = hkdf_extract(auth, shared_secret);
+    Blob info;
+    info.reserve(sizeof(INFO_STR) + p256dh.size() + local_pub.size());
+    info.insert(info.end(), INFO_STR, INFO_STR + sizeof(INFO_STR));
+    info.insert(info.end(), p256dh.begin(), p256dh.end());
+    info.insert(info.end(), local_pub.begin(), local_pub.end());
+
+    Blob ikm = hkdf_expand(prk_key, info.data(), info.size(), 32);
+    Blob prk = hkdf_extract(salt, ikm);
+
+    Blob cek = hkdf_expand(prk, (const uint8_t*) CEK_STR, sizeof(CEK_STR), 16);
+    Blob nonce = hkdf_expand(prk, (const uint8_t*) NONCE_STR, sizeof(NONCE_STR), 12);
+
+    // 5. Encrypt
+    Blob plaintext;
+    plaintext.reserve(payload_length + 1);
+    plaintext.insert(plaintext.end(), payload, payload + payload_length);
+    plaintext.push_back(0x02); // Padding delimiter
+
+    struct gcm_aes128_ctx aes;
+    gcm_aes128_set_key(&aes, cek.data());
+    gcm_aes128_set_iv(&aes, nonce.size(), nonce.data());
+
+    Blob ciphertext(plaintext.size() + GCM_DIGEST_SIZE);
+    gcm_aes128_encrypt(&aes, plaintext.size(), ciphertext.data(), plaintext.data());
+    gcmAes128Digest(&aes, ciphertext.data() + plaintext.size());
+
+    // 6. Construct Output
+    Blob output;
+    output.reserve(16 + 4 + 1 + 65 + ciphertext.size());
+    output.insert(output.end(), salt.begin(), salt.end());
+
+    uint32_t rs = std::max<uint32_t>(4096, ciphertext.size());
+    uint8_t rs_bytes[4];
+    rs_bytes[0] = (rs >> 24) & 0xFF;
+    rs_bytes[1] = (rs >> 16) & 0xFF;
+    rs_bytes[2] = (rs >> 8) & 0xFF;
+    rs_bytes[3] = rs & 0xFF;
+    output.insert(output.end(), rs_bytes, rs_bytes + 4);
+
+    output.push_back(65); // idlen
+    output.insert(output.end(), local_pub.begin(), local_pub.end());
+    output.insert(output.end(), ciphertext.begin(), ciphertext.end());
+    return output;
+#endif
+}
+
+} // namespace crypto
+} // namespace dht

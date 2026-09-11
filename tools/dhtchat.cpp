@@ -1,21 +1,5 @@
-/*
- *  Copyright (C) 2014-2025 Savoir-faire Linux Inc.
- *
- *  Author: Adrien Béraud <adrien.beraud@savoirfairelinux.com>
- *
- *  This program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License as published by
- *  the Free Software Foundation; either version 3 of the License, or
- *  (at your option) any later version.
- *
- *  This program is distributed in the hope that it will be useful,
- *  but WITHOUT ANY WARRANTY; without even the implied warranty of
- *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *  GNU General Public License for more details.
- *
- *  You should have received a copy of the GNU General Public License
- *  along with this program. If not, see <https://www.gnu.org/licenses/>.
- */
+// Copyright (c) 2014-2026 Savoir-faire Linux Inc.
+// SPDX-License-Identifier: MIT
 #ifdef HAVE_CONFIG_H
 #include "config.h"
 #endif
@@ -28,30 +12,40 @@ extern "C" {
 }
 #include <ctime>
 
-using namespace dht;
+namespace dht {
+namespace tools {
 
 static std::mt19937_64 rd {dht::crypto::getSeededRandomEngine<std::mt19937_64>()};
-static std::uniform_int_distribution<dht::Value::Id> rand_id;
 
-const std::string printTime(const std::time_t& now) {
+const std::string
+printTime(const std::time_t& now)
+{
     struct tm tstruct = *localtime(&now);
     char buf[80];
     strftime(buf, sizeof(buf), "%Y-%m-%d %X", &tstruct);
     return buf;
 }
 
-void print_usage() {
+void
+print_usage()
+{
     std::cout << "Usage: dhtchat [-n network_id] [-p local_port] [-b bootstrap_host[:port]]" << std::endl << std::endl;
     std::cout << "dhtchat, a simple OpenDHT command line chat client." << std::endl;
     std::cout << "Report bugs to: https://opendht.net" << std::endl;
 }
 
+} // namespace tools
+} // namespace dht
+
 int
-main(int argc, char **argv)
+main(int argc, char** argv)
 {
-    auto params = parseArgs(argc, argv);
+    using namespace dht;
+    using IdDist = std::uniform_int_distribution<dht::Value::Id>;
+
+    auto params = tools::parseArgs(argc, argv);
     if (params.help) {
-        print_usage();
+        tools::print_usage();
         return 0;
     }
 #ifdef _MSC_VER
@@ -70,24 +64,23 @@ main(int argc, char **argv)
         if (not params.bootstrap.empty())
             dht.bootstrap(params.bootstrap);
 
-        print_node_info(dht.getNodeInfo());
+        tools::print_node_info(dht.getNodeInfo());
         std::cout << "  type 'c {hash}' to join a channel" << std::endl << std::endl;
 
         bool connected {false};
         InfoHash room;
         std::future<size_t> token;
 
-        const InfoHash myid = dht.getId();
+        const auto mypk = dht.getPublicKey();
 
 #ifndef _MSC_VER
         // using the GNU History API
         using_history();
 #endif
 
-        while (true)
-        {
+        while (true) {
             // using the GNU Readline API
-            std::string line = readLine(connected ? PROMPT : "> ");
+            std::string line = tools::readLine(connected ? tools::PROMPT : "> ");
             if (!line.empty() && line[0] == '\0')
                 break;
             if (line.empty())
@@ -97,7 +90,7 @@ main(int argc, char **argv)
             std::string op, idstr;
             iss >> op;
             if (not connected) {
-                if (op  == "x" || op == "q" || op == "exit" || op == "quit")
+                if (op == "x" || op == "q" || op == "exit" || op == "quit")
                     break;
                 else if (op == "c") {
                     iss >> idstr;
@@ -108,10 +101,12 @@ main(int argc, char **argv)
                     }
 
                     token = dht.listen<dht::ImMessage>(room, [&](dht::ImMessage&& msg) {
-                        if (msg.from != myid)
-                            std::cout << msg.from.toString() << " at " << printTime(msg.date)
-                                      << " (took " << print_duration(std::chrono::system_clock::now() - std::chrono::system_clock::from_time_t(msg.date))
-                                      << ") " << (msg.to == myid ? "ENCRYPTED ":"") << ": " << msg.id << " - " << msg.msg << std::endl;
+                        if (msg.owner && msg.owner->getLongId() != mypk->getLongId())
+                            std::cout << msg.from.toString() << " at " << tools::printTime(msg.date) << " (took "
+                                      << print_duration(std::chrono::system_clock::now()
+                                                        - std::chrono::system_clock::from_time_t(msg.date))
+                                      << ") " << (msg.to == mypk->getId() ? "ENCRYPTED " : "") << ": " << msg.id
+                                      << " - " << msg.msg << std::endl;
                         return true;
                     });
                     connected = true;
@@ -127,25 +122,28 @@ main(int argc, char **argv)
                 } else if (op == "e") {
                     iss >> idstr;
                     std::getline(iss, line);
-                    dht.putEncrypted(room, InfoHash(idstr), dht::ImMessage(rand_id(rd), std::move(line), now), [](bool ok) {
-                        //dht.cancelPut(room, id);
-                        if (not ok)
-                            std::cout << "Message publishing failed !" << std::endl;
-                    });
+                    dht.putEncrypted(room,
+                                     PkId(idstr),
+                                     dht::ImMessage(IdDist()(tools::rd), std::move(line), now),
+                                     [](bool ok) {
+                                         // dht.cancelPut(room, id);
+                                         if (not ok)
+                                             std::cout << "Message publishing failed !" << std::endl;
+                                     });
                 } else {
-                    dht.putSigned(room, dht::ImMessage(rand_id(rd), std::move(line), now), [](bool ok) {
-                        //dht.cancelPut(room, id);
+                    dht.putSigned(room, dht::ImMessage(IdDist()(tools::rd), std::move(line), now), [](bool ok) {
+                        // dht.cancelPut(room, id);
                         if (not ok)
                             std::cout << "Message publishing failed !" << std::endl;
                     });
                 }
             }
         }
-    } catch(const std::exception&e) {
-        std::cerr << std::endl <<  e.what() << std::endl;
+    } catch (const std::exception& e) {
+        std::cerr << std::endl << e.what() << std::endl;
     }
 
-    std::cout << std::endl <<  "Stopping node..." << std::endl;
+    std::cout << std::endl << "Stopping node..." << std::endl;
     dht.join();
 #ifdef _MSC_VER
     gnutls_global_deinit();

@@ -1,22 +1,5 @@
-/*
- *  Copyright (C) 2014-2025 Savoir-faire Linux Inc.
- *
- *  Author: Adrien Béraud <adrien.beraud@savoirfairelinux.com>
- *  Author: Sébastien Blin <sebastien.blin@savoirfairelinux.com>
- *
- *  This program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License as published by
- *  the Free Software Foundation; either version 3 of the License, or
- *  (at your option) any later version.
- *
- *  This program is distributed in the hope that it will be useful,
- *  but WITHOUT ANY WARRANTY; without even the implied warranty of
- *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *  GNU General Public License for more details.
- *
- *  You should have received a copy of the GNU General Public License
- *  along with this program. If not, see <https://www.gnu.org/licenses/>.
- */
+// Copyright (c) 2014-2026 Savoir-faire Linux Inc.
+// SPDX-License-Identifier: MIT
 
 // Common utility methods used by C++ OpenDHT tools.
 #pragma once
@@ -34,27 +17,27 @@
 
 #include <fmt/ranges.h>
 
-#if !defined(WIN32) && !defined(_WIN32) && !defined(__WIN32__) && !defined(__NT__)
-    #pragma message "Building on UNIX-like platform, linking system getopt"
-    #include <getopt.h>
-    #include <readline/readline.h>
-    #include <readline/history.h>
-#endif
+#ifndef _WIN32
+#include <getopt.h>
+#include <readline/readline.h>
+#include <readline/history.h>
+#else
 #ifdef _MSC_VER
-    #pragma message("Building on WIN32 platform using MSVC, linking wingetopt")
-    #include "wingetopt.h"
+#pragma message("Building on WIN32 platform using MSVC, linking wingetopt")
+#include "wingetopt.h"
 #endif
-#if defined(__MINGW32__) || defined (__MINGW64__)
-    #pragma message "Building on MinGW, linking system-wide getopt"
-    #include <getopt.h>
-    #include <readline/readline.h>
-    #include <readline/history.h>
+#if defined(__MINGW32__) || defined(__MINGW64__)
+#pragma message "Building on MinGW, linking system-wide getopt"
+#include <getopt.h>
+#include <readline/readline.h>
+#include <readline/history.h>
+#endif
 #endif
 
-#if defined(_MSC_VER) || defined(__MINGW32__) || defined (__MINGW64__)
-    #define SIGHUP 0
-    #include <io.h>
-    #define DISABLE_SIGNALS
+#if defined(_MSC_VER) || defined(__MINGW32__) || defined(__MINGW64__)
+#define SIGHUP 0
+#include <io.h>
+#define DISABLE_SIGNALS
 #endif
 
 #include <sys/types.h>
@@ -71,12 +54,17 @@
 #include <sstream>
 #include <fstream>
 
+namespace dht {
+namespace tools {
+
 /*
  * The mapString shall have the following format:
  *
  *      k1:v1[,k2:v2[,...]]
  */
-std::map<std::string, std::string> parseStringMap(std::string mapString) {
+std::map<std::string, std::string>
+parseStringMap(std::string mapString)
+{
     std::istringstream keySs(mapString);
     std::string mapStr;
     std::map<std::string, std::string> map;
@@ -87,14 +75,16 @@ std::map<std::string, std::string> parseStringMap(std::string mapString) {
 
         while (std::getline(mapSs, key, ':')) {
             std::getline(mapSs, value, ':');
-            map[key] = { value };
+            map[key] = {value};
         }
     }
     return map;
 }
 
 #ifdef OPENDHT_INDEXATION
-dht::indexation::Pht::Key createPhtKey(std::map<std::string, std::string> pht_key_str_map) {
+dht::indexation::Pht::Key
+createPhtKey(std::map<std::string, std::string> pht_key_str_map)
+{
     dht::indexation::Pht::Key pht_key;
     for (auto f : pht_key_str_map) {
         dht::Blob prefix {f.second.begin(), f.second.end()};
@@ -104,7 +94,9 @@ dht::indexation::Pht::Key createPhtKey(std::map<std::string, std::string> pht_ke
 }
 #endif
 
-bool isInfoHash(const dht::InfoHash& h) {
+bool
+isInfoHash(const dht::InfoHash& h)
+{
     if (not h) {
         std::cout << "Syntax error: invalid InfoHash." << std::endl;
         return false;
@@ -118,19 +110,20 @@ loadFile(const std::string& path)
     std::vector<uint8_t> buffer;
     std::ifstream file(path, std::ios::binary);
     if (!file)
-        throw std::runtime_error("Can't read file: "+path);
+        throw std::runtime_error("Can't read file: " + path);
     file.seekg(0, std::ios::end);
     auto size = file.tellg();
     if (size > std::numeric_limits<unsigned>::max())
-        throw std::runtime_error("File is too big: "+path);
+        throw std::runtime_error("File is too big: " + path);
     buffer.resize(size);
     file.seekg(0, std::ios::beg);
-    if (!file.read((char*)buffer.data(), size))
-        throw std::runtime_error("Can't load file: "+path);
+    if (!file.read((char*) buffer.data(), size))
+        throw std::runtime_error("Can't load file: " + path);
     return buffer;
 }
 
-struct dht_params {
+struct dht_params
+{
     bool help {false}; // print help and exit
     bool version {false};
     bool generate_identity {false};
@@ -203,7 +196,9 @@ getDhtConfig(dht_params& params)
     }
     if (context.logger) {
         context.statusChangedCallback = [logger = context.logger](dht::NodeStatus status4, dht::NodeStatus status6) {
-            logger->w("Connectivity changed: IPv4: %s, IPv6: %s", dht::statusToStr(status4), dht::statusToStr(status6));
+            logger->warn("Connectivity changed: IPv4: {}, IPv6: {}",
+                         dht::statusToStr(status4),
+                         dht::statusToStr(status6));
         };
         context.publicAddressChangedCb = [logger = context.logger](std::vector<dht::SockAddr> addrs) {
             logger->warn("Public address changed: {}", addrs);
@@ -212,7 +207,9 @@ getDhtConfig(dht_params& params)
     return {std::move(config), std::move(context)};
 }
 
-void print_node_info(const dht::NodeInfo& info) {
+void
+print_node_info(const dht::NodeInfo& info)
+{
     std::cout << "OpenDHT node " << info.node_id << " running on ";
     if (info.bound4 == info.bound6)
         std::cout << "port " << info.bound4 << std::endl;
@@ -220,43 +217,48 @@ void print_node_info(const dht::NodeInfo& info) {
         std::cout << "IPv4 port " << info.bound4 << ", IPv6 port " << info.bound6 << std::endl;
     if (info.id)
         std::cout << "Public key ID " << info.id << std::endl;
+    std::cout << "Storage: " << info.storage_values << " values, " << printByteCount(info.storage_size) << std::endl;
+    std::cout << "Local storage: " << info.local_storage_values << " values, "
+              << printByteCount(info.local_storage_size) << std::endl;
+    std::cout << "Ongoing operations: " << info.ongoing_ops << std::endl;
 }
 
 static const constexpr struct option long_options[] = {
-    {"help",                    no_argument      , nullptr, 'h'},
-    {"port",                    required_argument, nullptr, 'p'},
-    {"net",                     required_argument, nullptr, 'n'},
-    {"bootstrap",               required_argument, nullptr, 'b'},
-    {"identity",                no_argument      , nullptr, 'i'},
-    {"save-identity",           required_argument, nullptr, 'I'},
-    {"certificate",             required_argument, nullptr, 'c'},
-    {"privkey",                 required_argument, nullptr, 'k'},
-    {"privkey-password",        required_argument, nullptr, 'm'},
-    {"verbose",                 no_argument      , nullptr, 'v'},
-    {"daemonize",               no_argument      , nullptr, 'd'},
-    {"service",                 no_argument      , nullptr, 's'},
-    {"peer-discovery",          no_argument      , nullptr, 'D'},
-    {"no-rate-limit",           no_argument      , nullptr, 'U'},
-    {"public-stable",           no_argument      , nullptr, 'P'},
-    {"persist",                 required_argument, nullptr, 'f'},
-    {"logfile",                 required_argument, nullptr, 'l'},
-    {"syslog",                  no_argument      , nullptr, 'L'},
-    {"proxyserver",             required_argument, nullptr, 'S'},
-    {"proxyserverssl",          required_argument, nullptr, 'e'},
-    {"proxy-addr",              required_argument, nullptr, 'a'},
-    {"proxy-certificate",       required_argument, nullptr, 'w'},
-    {"proxy-privkey",           required_argument, nullptr, 'K'},
-    {"proxy-privkey-password",  required_argument, nullptr, 'M'},
-    {"proxyclient",             required_argument, nullptr, 'C'},
-    {"pushserver",              required_argument, nullptr, 'y'},
-    {"devicekey",               required_argument, nullptr, 'z'},
-    {"bundleid",                required_argument, nullptr, 'u'},
-    {"version",                 no_argument      , nullptr, 'V'},
-    {nullptr,                   0                , nullptr,  0}
+    {"help",                   no_argument,       nullptr, 'h'},
+    {"port",                   required_argument, nullptr, 'p'},
+    {"net",                    required_argument, nullptr, 'n'},
+    {"bootstrap",              required_argument, nullptr, 'b'},
+    {"identity",               no_argument,       nullptr, 'i'},
+    {"save-identity",          required_argument, nullptr, 'I'},
+    {"certificate",            required_argument, nullptr, 'c'},
+    {"privkey",                required_argument, nullptr, 'k'},
+    {"privkey-password",       required_argument, nullptr, 'm'},
+    {"verbose",                no_argument,       nullptr, 'v'},
+    {"daemonize",              no_argument,       nullptr, 'd'},
+    {"service",                no_argument,       nullptr, 's'},
+    {"peer-discovery",         no_argument,       nullptr, 'D'},
+    {"no-rate-limit",          no_argument,       nullptr, 'U'},
+    {"public-stable",          no_argument,       nullptr, 'P'},
+    {"persist",                required_argument, nullptr, 'f'},
+    {"logfile",                required_argument, nullptr, 'l'},
+    {"syslog",                 no_argument,       nullptr, 'L'},
+    {"proxyserver",            required_argument, nullptr, 'S'},
+    {"proxyserverssl",         required_argument, nullptr, 'e'},
+    {"proxy-addr",             required_argument, nullptr, 'a'},
+    {"proxy-certificate",      required_argument, nullptr, 'w'},
+    {"proxy-privkey",          required_argument, nullptr, 'K'},
+    {"proxy-privkey-password", required_argument, nullptr, 'M'},
+    {"proxyclient",            required_argument, nullptr, 'C'},
+    {"pushserver",             required_argument, nullptr, 'y'},
+    {"devicekey",              required_argument, nullptr, 'z'},
+    {"bundleid",               required_argument, nullptr, 'u'},
+    {"version",                no_argument,       nullptr, 'V'},
+    {nullptr,                  0,                 nullptr, 0  }
 };
 
 dht_params
-parseArgs(int argc, char **argv) {
+parseArgs(int argc, char** argv)
+{
     dht_params params;
     int opt;
     std::string privkey;
@@ -264,29 +266,26 @@ parseArgs(int argc, char **argv) {
     while ((opt = getopt_long(argc, argv, "hidsvODUPp:n:b:f:l:", long_options, nullptr)) != -1) {
         switch (opt) {
         case 'p': {
-                int port_arg = atoi(optarg);
-                if (port_arg >= 0 && port_arg < 0x10000)
-                    params.port = port_arg;
-                else
-                    std::cout << "Invalid port: " << port_arg << std::endl;
-            }
-            break;
+            int port_arg = atoi(optarg);
+            if (port_arg >= 0 && port_arg < 0x10000)
+                params.port = port_arg;
+            else
+                std::cout << "Invalid port: " << port_arg << std::endl;
+        } break;
         case 'S': {
-                int port_arg = atoi(optarg);
-                if (port_arg >= 0 && port_arg < 0x10000)
-                    params.proxyserver = port_arg;
-                else
-                    std::cout << "Invalid port: " << port_arg << std::endl;
-            }
-            break;
+            int port_arg = atoi(optarg);
+            if (port_arg >= 0 && port_arg < 0x10000)
+                params.proxyserver = port_arg;
+            else
+                std::cout << "Invalid port: " << port_arg << std::endl;
+        } break;
         case 'e': {
-                int port_arg = atoi(optarg);
-                if (port_arg >= 0 && port_arg < 0x10000)
-                    params.proxyserverssl = port_arg;
-                else
-                    std::cout << "Invalid port: " << port_arg << std::endl;
-            }
-            break;
+            int port_arg = atoi(optarg);
+            if (port_arg >= 0 && port_arg < 0x10000)
+                params.proxyserverssl = port_arg;
+            else
+                std::cout << "Invalid port: " << port_arg << std::endl;
+        } break;
         case 'D':
             params.peer_discovery = true;
             break;
@@ -315,7 +314,7 @@ parseArgs(int argc, char **argv) {
             params.public_stable = true;
             break;
         case 'b':
-            params.bootstrap = (optarg[0] == '=') ? optarg+1 : optarg;
+            params.bootstrap = (optarg[0] == '=') ? optarg + 1 : optarg;
             break;
         case 'V':
             params.version = true;
@@ -382,8 +381,7 @@ parseArgs(int argc, char **argv) {
     }
     if (not privkey.empty()) {
         try {
-            params.id.first = std::make_shared<dht::crypto::PrivateKey>(loadFile(privkey),
-                                                                        params.privkey_pwd);
+            params.id.first = std::make_shared<dht::crypto::PrivateKey>(loadFile(privkey), params.privkey_pwd);
         } catch (const std::exception& e) {
             throw std::runtime_error(std::string("Error loading private key: ") + e.what());
         }
@@ -414,21 +412,25 @@ readLine(const char* prefix = PROMPT)
 #else
     char line_read[512];
     std::cout << PROMPT;
-    fgets(line_read, 512 , stdin);
+    fgets(line_read, 512, stdin);
 #endif
     return line_read ? std::string(line_read) : std::string("\0", 1);
 }
 
-struct ServiceRunner {
-    bool wait() {
-        std::unique_lock<std::mutex> lock(m);
-        cv.wait(lock, [&]{return terminate.load();});
+struct ServiceRunner
+{
+    bool wait()
+    {
+        std::unique_lock lock(m);
+        cv.wait(lock, [&] { return terminate.load(); });
         return !terminate;
     }
-    void kill() {
+    void kill()
+    {
         terminate = true;
         cv.notify_all();
     }
+
 private:
     std::condition_variable cv;
     std::mutex m;
@@ -438,9 +440,10 @@ private:
 ServiceRunner runner;
 
 #ifndef DISABLE_SIGNALS
-void signal_handler(int sig)
+void
+signal_handler(int sig)
 {
-    switch(sig) {
+    switch (sig) {
     case SIGHUP:
         break;
     case SIGINT:
@@ -453,25 +456,29 @@ void signal_handler(int sig)
 }
 #endif
 
-void setupSignals()
+void
+setupSignals()
 {
 #ifndef DISABLE_SIGNALS
-    signal(SIGCHLD,SIG_IGN); /* ignore child */
-    signal(SIGTSTP,SIG_IGN); /* ignore tty signals */
-    signal(SIGTTOU,SIG_IGN);
-    signal(SIGTTIN,SIG_IGN);
-    signal(SIGHUP,signal_handler); /* catch hangup signal */
-    signal(SIGINT,signal_handler); /* catch interrupt signal */
-    signal(SIGTERM,signal_handler); /* catch kill signal */
+    signal(SIGCHLD, SIG_IGN); /* ignore child */
+    signal(SIGTSTP, SIG_IGN); /* ignore tty signals */
+    signal(SIGTTOU, SIG_IGN);
+    signal(SIGTTIN, SIG_IGN);
+    signal(SIGHUP, signal_handler);  /* catch hangup signal */
+    signal(SIGINT, signal_handler);  /* catch interrupt signal */
+    signal(SIGTERM, signal_handler); /* catch kill signal */
 #endif
 }
 
-void daemonize()
+void
+daemonize()
 {
 #ifndef DISABLE_SIGNALS
     pid_t pid = fork();
-    if (pid < 0) exit(EXIT_FAILURE);
-    if (pid > 0) exit(EXIT_SUCCESS);
+    if (pid < 0)
+        exit(EXIT_FAILURE);
+    if (pid > 0)
+        exit(EXIT_SUCCESS);
 
     umask(0);
 
@@ -485,3 +492,6 @@ void daemonize()
     close(STDERR_FILENO);
 #endif
 }
+
+} // namespace tools
+} // namespace dht

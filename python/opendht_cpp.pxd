@@ -1,31 +1,17 @@
-# Copyright (c) 2015-2023 Savoir-faire Linux Inc.
-# Author(s): Adrien Béraud <adrien.beraud@savoirfairelinux.com>
-#            Simon Désaulniers <sim.desaulniers@gmail.com>
-#
-# This program is free software; you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation; either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program; If not, see <https://www.gnu.org/licenses/>.
+# Copyright (c) 2014-2026 Savoir-faire Linux Inc.
+# SPDX-License-Identifier: MIT
 
-from libc.stdint cimport *
+from libc.stdint cimport uint8_t, uint16_t, uint32_t, uint64_t
 from libcpp cimport bool, nullptr_t, nullptr
 from libcpp.string cimport string
 from libcpp.vector cimport vector
 from libcpp.utility cimport pair
 from libcpp.map cimport map
 from libcpp.memory cimport shared_ptr, make_shared
-from libc.string cimport const_char, const_uchar
+from libc.string cimport const_char
 
 ctypedef uint16_t in_port_t
-ctypedef unsigned short int sa_family_t;
+ctypedef unsigned short int sa_family_t
 
 cdef extern from "<chrono>" namespace "std::chrono" nogil:
     cdef cppclass duration[ulong]:
@@ -51,6 +37,7 @@ cdef extern from "<future>" namespace "std" nogil:
         shared_future[T] share()
 
 cdef extern from "opendht/utils.h" namespace "dht":
+    const char* version()
     cdef cppclass time_point:
         @staticmethod
         time_point min() const
@@ -74,6 +61,24 @@ cdef extern from "opendht/infohash.h" namespace "dht":
         bool operator==(InfoHash) const
         bool operator<(InfoHash) const
         bool operator bool() const
+    
+    cdef cppclass PkId:
+        PkId() except +
+        PkId(string s) except +
+        string toString() const
+        bool getBit(unsigned bit) const
+        void setBit(unsigned bit, bool b)
+        double toFloat() const
+        @staticmethod
+        unsigned commonBits(PkId a, PkId b)
+        @staticmethod
+        PkId get(string s)
+        @staticmethod
+        PkId getRandom()
+        bool operator==(PkId) const
+        bool operator<(PkId) const
+        bool operator bool() const
+
 
 cdef extern from "opendht/sockaddr.h" namespace "dht":
     cdef cppclass SockAddr:
@@ -101,6 +106,7 @@ cdef extern from "opendht/crypto.h" namespace "dht::crypto":
         PrivateKey()
         shared_ptr[PublicKey] getSharedPublicKey() const
         Blob decrypt(Blob data) const
+        Blob sign(Blob data) const
         @staticmethod
         PrivateKey generate()
         @staticmethod
@@ -109,12 +115,16 @@ cdef extern from "opendht/crypto.h" namespace "dht::crypto":
     cdef cppclass PublicKey:
         PublicKey()
         InfoHash getId() const
+        PkId getLongId() const
         Blob encrypt(Blob data) const
+        bool checkSignature(Blob data, Blob signature) const
+        bool operator==(PublicKey) const
 
     cdef cppclass Certificate:
         Certificate()
         Certificate(string pem)
         InfoHash getId() const
+        PkId getLongId() const
         string toString() const
         string getName() const
         void revoke(PrivateKey key, Certificate cert)
@@ -255,6 +265,7 @@ cdef extern from "opendht/dhtrunner.h" namespace "dht":
             SockAddr bind6
 
         InfoHash getId() const
+        shared_ptr[PublicKey] getPublicKey() const
         InfoHash getNodeId() const
         void bootstrap(const_char*, const_char*)
         void bootstrap(const SockAddr&, DoneCallbackSimple done_cb)
@@ -271,7 +282,7 @@ cdef extern from "opendht/dhtrunner.h" namespace "dht":
         void get(InfoHash key, GetCallback get_cb, DoneCallback done_cb, nullptr_t f, Where w)
         void put(InfoHash key, shared_ptr[Value] val, DoneCallback done_cb, time_point created, bool permanent)
         void putSigned(InfoHash key, shared_ptr[Value] val, DoneCallback done_cb, bool permanent) 
-        void putEncrypted(InfoHash key, InfoHash to, shared_ptr[Value] val, DoneCallback done_cb, bool permanent)
+        void putEncrypted(InfoHash key, PkId to, shared_ptr[Value] val, DoneCallback done_cb, bool permanent)
         void putEncrypted(InfoHash key, shared_ptr[PublicKey] to, shared_ptr[Value] val, DoneCallback done_cb, bool permanent)
         void cancelPut(InfoHash key, shared_ptr[Value] val)
         ListenToken listen(InfoHash key, ValueCallback get_cb)
@@ -303,3 +314,8 @@ cdef extern from "opendht/indexation/pht.h" namespace "dht::indexation":
         void insert(IndexKey k, IndexValue v, DoneCallbackSimple cb)
         @staticmethod
         LookupCallback bindLookupCb(LookupCallbackRaw cb, void *user_data)
+
+cdef extern from "gnutls/gnutls.h" nogil:
+    int gnutls_global_init()
+    void gnutls_global_deinit()
+    const char* gnutls_strerror(int error)

@@ -1,21 +1,5 @@
-/*
- *  Copyright (C) 2014-2025 Savoir-faire Linux Inc.
- *  Author: Vsevolod Ivanov <vsevolod.ivanov@savoirfairelinux.com>
- *
- *  This program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License as published by
- *  the Free Software Foundation; either version 3 of the License, or
- *  (at your option) any later version.
- *
- *  This program is distributed in the hope that it will be useful,
- *  but WITHOUT ANY WARRANTY; without even the implied warranty of
- *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *  GNU General Public License for more details.
- *
- *  You should have received a copy of the GNU General Public License
- *  along with this program. If not, see <https://www.gnu.org/licenses/>.
- */
-
+// Copyright (c) 2014-2026 Savoir-faire Linux Inc.
+// SPDX-License-Identifier: MIT
 #pragma once
 
 #include "def.h"
@@ -25,8 +9,8 @@
 // some libraries may try to redefine snprintf
 // but restinio will use it in std namespace
 #ifdef _MSC_VER
-#   undef snprintf
-#   define snprintf snprintf
+#undef snprintf
+#define snprintf snprintf
 #endif
 
 #include <asio/ip/tcp.hpp>
@@ -47,7 +31,7 @@ namespace restinio {
 namespace impl {
 class tls_socket_t;
 }
-}
+} // namespace restinio
 
 namespace dht {
 namespace log {
@@ -62,24 +46,25 @@ namespace http {
 
 using HandlerCb = std::function<void(const asio::error_code& ec)>;
 using BytesHandlerCb = std::function<void(const asio::error_code& ec, size_t bytes)>;
-using ConnectHandlerCb = std::function<void(const asio::error_code& ec,
-                                            const asio::ip::tcp::endpoint& endpoint)>;
+using ConnectHandlerCb = std::function<void(const asio::error_code& ec, const asio::ip::tcp::endpoint& endpoint)>;
 
 using ssl_socket_t = restinio::impl::tls_socket_t;
 using socket_t = asio::ip::tcp::socket;
 
-class OPENDHT_PUBLIC Url
+struct OPENDHT_PUBLIC Url
 {
-public:
     Url() = default;
-    Url(std::string_view url);
+    Url(std::string url);
+
     std::string url;
     std::string protocol {"http"};
-    std::string host;
-    std::string service;
+    std::string_view user;
+    std::string_view password;
+    std::string_view host;
+    std::string_view service;
     std::string target;
-    std::string query;
-    std::string fragment;
+    std::string_view query;
+    std::string_view fragment;
 
     std::string toString() const;
 };
@@ -88,11 +73,13 @@ class OPENDHT_PUBLIC Connection : public std::enable_shared_from_this<Connection
 {
 public:
     Connection(asio::io_context& ctx, const bool ssl = true, std::shared_ptr<log::Logger> l = {});
-    Connection(asio::io_context& ctx, std::shared_ptr<dht::crypto::Certificate> server_ca,
-               const dht::crypto::Identity& identity, std::shared_ptr<log::Logger> l = {});
+    Connection(asio::io_context& ctx,
+               std::shared_ptr<dht::crypto::Certificate> server_ca,
+               const dht::crypto::Identity& identity,
+               std::shared_ptr<log::Logger> l = {});
     ~Connection();
 
-    inline unsigned int id() const { return  id_; };
+    inline unsigned int id() const { return id_; };
     bool is_open() const;
     bool is_ssl() const;
     void checkOcsp(bool check = true) { checkOcsp_ = check; }
@@ -119,13 +106,20 @@ public:
 
     void timeout(const std::chrono::seconds& timeout, HandlerCb cb = {});
 
+    /**
+     * Close the underlying socket.
+     * Safe to call from any thread: the actual close is dispatched to
+     * the thread running the io_context.
+     */
     void close();
 
 private:
+    void doClose();
 
     template<typename T>
-    T wrapCallback(T cb) const {
-        return [t=shared_from_this(),cb=std::move(cb)](auto ...params) {
+    T wrapCallback(T cb) const
+    {
+        return [t = shared_from_this(), cb = std::move(cb)](auto... params) {
             cb(params...);
         };
     }
@@ -159,35 +153,34 @@ private:
 class OPENDHT_PUBLIC Resolver
 {
 public:
-    using ResolverCb = std::function<void(const asio::error_code& ec,
-                                          const std::vector<asio::ip::tcp::endpoint>& endpoints)>;
+    using ResolverCb
+        = std::function<void(const asio::error_code& ec, const std::vector<asio::ip::tcp::endpoint>& endpoints)>;
 
-    Resolver(asio::io_context& ctx, const std::string& url, std::shared_ptr<log::Logger> logger = {});
-    Resolver(asio::io_context& ctx, const std::string& host, const std::string& service,
-             const bool ssl = false, std::shared_ptr<log::Logger> logger = {});
+    Resolver(asio::io_context& ctx, std::string url, std::shared_ptr<log::Logger> logger = {});
+    Resolver(asio::io_context& ctx,
+             std::string_view host,
+             std::string_view service,
+             const bool ssl = false,
+             std::shared_ptr<log::Logger> logger = {});
 
     // use already resolved endpoints with classes using this resolver
-    Resolver(asio::io_context& ctx, std::vector<asio::ip::tcp::endpoint> endpoints,
-             const bool ssl = false, std::shared_ptr<log::Logger> logger = {});
-    Resolver(asio::io_context& ctx, const std::string& url, std::vector<asio::ip::tcp::endpoint> endpoints,
-            std::shared_ptr<log::Logger> logger = {});
+    Resolver(asio::io_context& ctx,
+             std::vector<asio::ip::tcp::endpoint> endpoints,
+             const bool ssl = false,
+             std::shared_ptr<log::Logger> logger = {});
 
     ~Resolver();
 
-    inline const Url& get_url() const {
-        return url_;
-    }
+    inline const Url& get_url() const { return url_; }
 
     void add_callback(ResolverCb cb, sa_family_t family = AF_UNSPEC);
 
-    std::shared_ptr<log::Logger> getLogger() const {
-        return logger_;
-    }
+    std::shared_ptr<log::Logger> getLogger() const { return logger_; }
 
     void cancel();
 
 private:
-    void resolve(const std::string& host, const std::string& service);
+    void resolve(std::string_view host, std::string_view service);
 
     mutable std::mutex mutex_;
 
@@ -217,13 +210,7 @@ struct Response
 class OPENDHT_PUBLIC Request : public std::enable_shared_from_this<Request>
 {
 public:
-    enum class State {
-        CREATED,
-        SENDING,
-        HEADER_RECEIVED,
-        RECEIVING,
-        DONE
-    };
+    enum class State { CREATED, SENDING, HEADER_RECEIVED, RECEIVING, DONE };
     using OnStatusCb = std::function<void(unsigned status_code)>;
     using OnDataCb = std::function<void(const char* at, size_t length)>;
     using OnStateChangeCb = std::function<void(State state, const Response& response)>;
@@ -231,46 +218,51 @@ public:
     using OnDoneCb = std::function<void(const Response& response)>;
 
     // resolves implicitly
-    Request(asio::io_context& ctx, const std::string& url, const Json::Value& json, OnJsonCb jsoncb,
+    Request(asio::io_context& ctx,
+            std::string url,
+            const Json::Value& json,
+            OnJsonCb jsoncb,
             std::shared_ptr<log::Logger> logger = {});
-    Request(asio::io_context& ctx, const std::string& url, OnJsonCb jsoncb,
-            std::shared_ptr<log::Logger> logger = {});
+    Request(asio::io_context& ctx, std::string url, OnJsonCb jsoncb, std::shared_ptr<log::Logger> logger = {});
 
-    Request(asio::io_context& ctx, const std::string& url, std::shared_ptr<log::Logger> logger = {});
-    Request(asio::io_context& ctx, const std::string& host, const std::string& service,
-            const bool ssl = false, std::shared_ptr<log::Logger> logger = {});
-    Request(asio::io_context& ctx, const std::string& url, OnDoneCb onDone, std::shared_ptr<log::Logger> logger = {});
+    Request(asio::io_context& ctx, std::string url, std::shared_ptr<log::Logger> logger = {});
+    Request(asio::io_context& ctx,
+            std::string_view host,
+            std::string_view service,
+            const bool ssl = false,
+            std::shared_ptr<log::Logger> logger = {});
+    Request(asio::io_context& ctx, std::string url, OnDoneCb onDone, std::shared_ptr<log::Logger> logger = {});
 
     // user defined resolver
     Request(asio::io_context& ctx, std::shared_ptr<Resolver> resolver, sa_family_t family = AF_UNSPEC);
-    Request(asio::io_context& ctx, std::shared_ptr<Resolver> resolver, const std::string& target, sa_family_t family = AF_UNSPEC);
+    Request(asio::io_context& ctx,
+            std::shared_ptr<Resolver> resolver,
+            const std::string& target,
+            sa_family_t family = AF_UNSPEC);
 
     // user defined resolved endpoints
-    Request(asio::io_context& ctx, std::vector<asio::ip::tcp::endpoint>&& endpoints,
-            const bool ssl = false, std::shared_ptr<log::Logger> logger = {});
+    Request(asio::io_context& ctx,
+            std::vector<asio::ip::tcp::endpoint>&& endpoints,
+            const bool ssl = false,
+            std::shared_ptr<log::Logger> logger = {});
 
     ~Request();
 
-    inline unsigned int id() const { return  id_; };
+    inline unsigned int id() const { return id_; };
     void set_connection(std::shared_ptr<Connection> connection);
     std::shared_ptr<Connection> get_connection() const;
-    inline const Url& get_url() const {
-        return resolver_->get_url();
-    };
+    inline const Url& get_url() const { return resolver_->get_url(); };
 
-    void timeout(const std::chrono::seconds& timeout, HandlerCb cb = {}) {
+    void timeout(const std::chrono::seconds& timeout, HandlerCb cb = {})
+    {
         timeout_ = timeout;
         timeoutCb_ = cb;
     }
 
     /** The previous request in case of redirect following */
-    std::shared_ptr<Request> getPrevious() const {
-        return prev_.lock();
-    }
+    std::shared_ptr<Request> getPrevious() const { return prev_.lock(); }
 
-    inline std::string& to_string() {
-        return request_;
-    }
+    inline std::string& to_string() { return request_; }
 
     void set_certificate_authority(std::shared_ptr<dht::crypto::Certificate> certificate);
     void set_identity(const dht::crypto::Identity& identity);
@@ -285,6 +277,7 @@ public:
     void set_header_field(restinio::http_field_t field, std::string value);
     void set_connection_type(restinio::http_connection_header_t connection);
     void set_body(std::string body);
+    void set_body(const uint8_t* data, size_t length);
     void set_auth(const std::string& username, const std::string& password);
 
     void add_on_status_callback(OnStatusCb cb);
@@ -306,7 +299,8 @@ public:
 private:
     using OnCompleteCb = std::function<void()>;
 
-    struct Callbacks {
+    struct Callbacks
+    {
         OnStatusCb on_status;
         OnDataCb on_header_field;
         OnDataCb on_header_value;
@@ -353,8 +347,6 @@ private:
 
     dht::crypto::Identity client_identity_;
     std::shared_ptr<dht::crypto::Certificate> server_ca_;
-    std::string service_;
-    std::string host_;
 
     unsigned int id_;
     static std::atomic_uint ids_;
@@ -381,4 +373,3 @@ private:
 
 } // namespace http
 } // namespace dht
-

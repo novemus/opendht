@@ -1,11 +1,12 @@
 FROM ghcr.io/savoirfairelinux/opendht/opendht-deps:latest
 LABEL maintainer="Adrien Béraud <adrien.beraud@savoirfairelinux.com>"
-LABEL org.opencontainers.image.source https://github.com/savoirfairelinux/opendht
+LABEL org.opencontainers.image.source=https://github.com/savoirfairelinux/opendht
 
 COPY . opendht
 
 RUN cd opendht && mkdir build && cd build \
 	&& cmake .. -DCMAKE_INSTALL_PREFIX=/usr \
+				-DBUILD_TESTING=Off \
 				-DCMAKE_INTERPROCEDURAL_OPTIMIZATION=On \
 				-DOPENDHT_C=On \
 				-DOPENDHT_PEER_DISCOVERY=On \

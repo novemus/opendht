@@ -1,20 +1,5 @@
-/*
- *  Copyright (C) 2014-2025 Savoir-faire Linux Inc.
- *  Author(s) : Adrien Béraud <adrien.beraud@savoirfairelinux.com>
- *
- *  This program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License as published by
- *  the Free Software Foundation; either version 3 of the License, or
- *  (at your option) any later version.
- *
- *  This program is distributed in the hope that it will be useful,
- *  but WITHOUT ANY WARRANTY; without even the implied warranty of
- *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *  GNU General Public License for more details.
- *
- *  You should have received a copy of the GNU General Public License
- *  along with this program. If not, see <https://www.gnu.org/licenses/>.
- */
+// Copyright (c) 2014-2026 Savoir-faire Linux Inc.
+// SPDX-License-Identifier: MIT
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -24,11 +9,11 @@
 
 namespace dht {
 
-
 GetCallbackSimple
 bindGetCb(GetCallbackRaw raw_cb, void* user_data)
 {
-    if (not raw_cb) return {};
+    if (not raw_cb)
+        return {};
     return [=](const std::shared_ptr<Value>& value) {
         return raw_cb(value, user_data);
     };
@@ -37,8 +22,9 @@ bindGetCb(GetCallbackRaw raw_cb, void* user_data)
 GetCallback
 bindGetCb(GetCallbackSimple cb)
 {
-    if (not cb) return {};
-    return [cb=std::move(cb)](const std::vector<std::shared_ptr<Value>>& values) {
+    if (not cb)
+        return {};
+    return [cb = std::move(cb)](const std::vector<std::shared_ptr<Value>>& values) {
         for (const auto& v : values)
             if (not cb(v))
                 return false;
@@ -49,7 +35,8 @@ bindGetCb(GetCallbackSimple cb)
 ValueCallback
 bindValueCb(ValueCallbackRaw raw_cb, void* user_data)
 {
-    if (not raw_cb) return {};
+    if (not raw_cb)
+        return {};
     return [=](const std::vector<std::shared_ptr<Value>>& values, bool expired) {
         for (const auto& v : values)
             if (not raw_cb(v, expired, user_data))
@@ -61,13 +48,16 @@ bindValueCb(ValueCallbackRaw raw_cb, void* user_data)
 ShutdownCallback
 bindShutdownCb(ShutdownCallbackRaw shutdown_cb_raw, void* user_data)
 {
-    return [=]() { shutdown_cb_raw(user_data); };
+    return [=]() {
+        shutdown_cb_raw(user_data);
+    };
 }
 
 DoneCallback
 bindDoneCb(DoneCallbackSimple donecb)
 {
-    if (not donecb) return {};
+    if (not donecb)
+        return {};
     using namespace std::placeholders;
     return std::bind(std::move(donecb), _1);
 }
@@ -75,15 +65,18 @@ bindDoneCb(DoneCallbackSimple donecb)
 DoneCallback
 bindDoneCb(DoneCallbackRaw raw_cb, void* user_data)
 {
-    if (not raw_cb) return {};
+    if (not raw_cb)
+        return {};
     return [=](bool success, const std::vector<std::shared_ptr<Node>>& nodes) {
-        raw_cb(success, (std::vector<std::shared_ptr<Node>>*)&nodes, user_data);
+        raw_cb(success, (std::vector<std::shared_ptr<Node>>*) &nodes, user_data);
     };
 }
 
 DoneCallbackSimple
-bindDoneCbSimple(DoneCallbackSimpleRaw raw_cb, void* user_data) {
-    if (not raw_cb) return {};
+bindDoneCbSimple(DoneCallbackSimpleRaw raw_cb, void* user_data)
+{
+    if (not raw_cb)
+        return {};
     return [=](bool success) {
         raw_cb(success, user_data);
     };
@@ -93,7 +86,8 @@ std::string
 NodeStats::toString() const
 {
     std::ostringstream ss;
-    ss << "Known nodes: " << good_nodes << " good, " << dubious_nodes << " dubious, " << incoming_nodes << " incoming." << std::endl;
+    ss << "Known nodes: " << good_nodes << " good, " << dubious_nodes << " dubious, " << incoming_nodes << " incoming."
+       << std::endl;
     ss << searches << " searches, " << node_cache_size << " total cached nodes" << std::endl;
     if (table_depth > 1) {
         ss << "Routing table depth: " << table_depth << std::endl;
@@ -145,6 +139,12 @@ NodeInfo::toJson() const
     val["ipv4"] = ipv4.toJson();
     val["ipv6"] = ipv6.toJson();
     val["ops"] = Json::Value::LargestUInt(ongoing_ops);
+    val["storage_values"] = Json::Value::LargestUInt(storage_values);
+    val["storage_size"] = Json::Value::LargestUInt(storage_size);
+    val["local_storage_values"] = Json::Value::LargestUInt(local_storage_values);
+    val["local_storage_size"] = Json::Value::LargestUInt(local_storage_size);
+    val["port_ipv4"] = Json::Value::LargestUInt(bound4);
+    val["port_ipv6"] = Json::Value::LargestUInt(bound6);
     return val;
 }
 
@@ -156,9 +156,14 @@ NodeInfo::NodeInfo(const Json::Value& v)
     ipv4 = NodeStats(v["ipv4"]);
     ipv6 = NodeStats(v["ipv6"]);
     ongoing_ops = v["ops"].asLargestUInt();
+    storage_values = v["storage_values"].asLargestUInt();
+    storage_size = v["storage_size"].asLargestUInt();
+    local_storage_values = v["local_storage_values"].asLargestUInt();
+    local_storage_size = v["local_storage_size"].asLargestUInt();
+    bound4 = v["port_ipv4"].asLargestUInt();
+    bound6 = v["port_ipv6"].asLargestUInt();
 }
 
 #endif
 
-
-}
+} // namespace dht

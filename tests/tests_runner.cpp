@@ -1,31 +1,34 @@
-/*
- *  Copyright (C) 2014-2025 Savoir-faire Linux Inc.
- *  Author: Sébastien Blin <sebastien.blin@savoirfairelinux.com>
- *
- *  This program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License as published by
- *  the Free Software Foundation; either version 3 of the License, or
- *  (at your option) any later version.
- *
- *  This program is distributed in the hope that it will be useful,
- *  but WITHOUT ANY WARRANTY; without even the implied warranty of
- *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *  GNU General Public License for more details.
- *
- *  You should have received a copy of the GNU General Public License
- *  along with this program; if not, write to the Free Software
- *  Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301 USA.
- */
+// Copyright (c) 2014-2026 Savoir-faire Linux Inc.
+// SPDX-License-Identifier: MIT
 #include <cppunit/extensions/TestFactoryRegistry.h>
 #include <cppunit/ui/text/TestRunner.h>
 #include <cppunit/CompilerOutputter.h>
 #include <iostream>
 
+namespace {
+
+void
+listTests(CppUnit::Test* test, const std::string& prefix = {})
+{
+    const auto name = test->getName();
+    const auto fullName = prefix.empty() ? name : prefix + "/" + name;
+    if (test->getChildTestCount() == 0) {
+        std::cout << fullName << std::endl;
+        return;
+    }
+    for (int index = 0; index < test->getChildTestCount(); ++index)
+        listTests(test->getChildTestAt(index), fullName);
+}
+
+} // namespace
+
 extern "C" {
 #include <gnutls/gnutls.h>
 }
 
-int main(int /*argc*/, char** /*argv*/) {
+int
+main(int argc, char** argv)
+{
 #ifdef _MSC_VER
     if (auto err = gnutls_global_init()) {
         std::cerr << "Failed to initialize GnuTLS: " << gnutls_strerror(err) << std::endl;
@@ -33,14 +36,21 @@ int main(int /*argc*/, char** /*argv*/) {
     }
 #endif
 
-    CppUnit::TestFactoryRegistry &registry = CppUnit::TestFactoryRegistry::getRegistry();
-    CppUnit::Test *suite = registry.makeTest();
+    CppUnit::TestFactoryRegistry& registry = CppUnit::TestFactoryRegistry::getRegistry();
+    CppUnit::Test* suite = registry.makeTest();
     if (suite->countTestCases() == 0) {
         std::cout << "No test cases specified for suite" << std::endl;
         return 1;
     }
+    if (argc > 1 && std::string(argv[1]) == "--list") {
+        listTests(suite);
+        return 0;
+    }
     CppUnit::TextUi::TestRunner runner;
-    runner.addTest(suite);
+    if (argc > 1)
+        runner.addTest(suite->findTest(argv[1]));
+    else
+        runner.addTest(suite);
     auto result = runner.run() ? 0 : 1;
     return result;
 }

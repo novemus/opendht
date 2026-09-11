@@ -1,26 +1,11 @@
-/*
- *  Copyright (C) 2014-2025 Savoir-faire Linux Inc.
- *  Author : Adrien Béraud <adrien.beraud@savoirfairelinux.com>
- *
- *  This program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License as published by
- *  the Free Software Foundation; either version 3 of the License, or
- *  (at your option) any later version.
- *
- *  This program is distributed in the hope that it will be useful,
- *  but WITHOUT ANY WARRANTY; without even the implied warranty of
- *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *  GNU General Public License for more details.
- *
- *  You should have received a copy of the GNU General Public License
- *  along with this program. If not, see <https://www.gnu.org/licenses/>.
- */
+// Copyright (c) 2014-2026 Savoir-faire Linux Inc.
+// SPDX-License-Identifier: MIT
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
 #endif
 
-#if defined(_WIN32) && (_WIN32_WINNT < 0x0502) && (NTDDI_VERSION >= NTDDI_VISTA) 
+#if defined(_WIN32) && (_WIN32_WINNT < 0x0502) && (NTDDI_VERSION >= NTDDI_VISTA)
 #define _WIN32_WINNT _WIN32_WINNT_WIN10
 #include <winsock2.h>
 #include <ws2tcpip.h>
@@ -42,30 +27,35 @@
 
 namespace dht {
 
-const char* version() {
+const char*
+version()
+{
     return PACKAGE_VERSION;
 }
 
-static constexpr std::array<uint8_t, 12> MAPPED_IPV4_PREFIX {{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff}};
+static constexpr std::array<uint8_t, 12> MAPPED_IPV4_PREFIX {
+    {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff}
+};
 
-std::pair<std::string, std::string>
-splitPort(std::string_view s) {
+std::pair<std::string_view, std::string_view>
+splitPort(std::string_view s)
+{
     if (s.empty())
         return {};
     if (s[0] == '[') {
         std::size_t closure = s.find_first_of(']');
         std::size_t found = s.find_last_of(':');
         if (closure == std::string_view::npos)
-            return {std::string(s), ""};
+            return {s, ""};
         if (found == std::string_view::npos or found < closure)
-            return {std::string(s.substr(1,closure-1)), ""};
-        return {std::string(s.substr(1,closure-1)), std::string(s.substr(found+1))};
+            return {s.substr(1, closure - 1), ""};
+        return {s.substr(1, closure - 1), s.substr(found + 1)};
     }
     std::size_t found = s.find_last_of(':');
     std::size_t first = s.find_first_of(':');
     if (found == std::string_view::npos or found != first)
-        return {std::string(s), ""};
-    return {std::string(s.substr(0,found)), std::string(s.substr(found+1))};
+        return {s, ""};
+    return {s.substr(0, found), s.substr(found + 1)};
 }
 
 std::vector<SockAddr>
@@ -80,8 +70,8 @@ SockAddr::resolve(const std::string& host, const std::string& service)
     hints.ai_socktype = SOCK_DGRAM;
     addrinfo* info = nullptr;
     int rc = getaddrinfo(host.c_str(), service.empty() ? nullptr : service.c_str(), &hints, &info);
-    if(rc != 0)
-        throw std::invalid_argument(std::string("Error: `") + host + ":" + service + "`: " + gai_strerror(rc));
+    if (rc != 0)
+        throw std::invalid_argument(fmt::format("Error: `{}:{}`: {}", host, service, gai_strerror(rc)));
 
     for (addrinfo* infop = info; infop; infop = infop->ai_next)
         ips.emplace_back(infop->ai_addr, infop->ai_addrlen);
@@ -108,11 +98,13 @@ SockAddr::setAddress(const char* address)
         throw std::runtime_error(std::string("Can't parse IP address: ") + strerror(errno));
 }
 
-void print_addr(std::ostream& out, const sockaddr* sa, socklen_t slen)
+void
+print_addr(std::ostream& out, const sockaddr* sa, socklen_t slen)
 {
     char hbuf[NI_MAXHOST];
     char sbuf[NI_MAXSERV];
-    if (sa and slen and !getnameinfo(sa, slen, hbuf, sizeof(hbuf), sbuf, sizeof(sbuf), NI_NUMERICHOST | NI_NUMERICSERV)) {
+    if (sa and slen
+        and !getnameinfo(sa, slen, hbuf, sizeof(hbuf), sbuf, sizeof(sbuf), NI_NUMERICHOST | NI_NUMERICSERV)) {
         if (sa->sa_family == AF_INET6)
             out << '[' << hbuf << ']';
         else
@@ -134,7 +126,7 @@ print_addr(const sockaddr* sa, socklen_t slen)
 std::string
 print_addr(const sockaddr_storage& ss, socklen_t sslen)
 {
-    return print_addr((const sockaddr*)&ss, sslen);
+    return print_addr((const sockaddr*) &ss, sslen);
 }
 
 bool
@@ -156,7 +148,7 @@ SockAddr::isLoopback() const
     switch (getFamily()) {
     case AF_INET: {
         auto addr_host = ntohl(getIPv4().sin_addr.s_addr);
-        uint8_t b1 = (uint8_t)(addr_host >> 24);
+        uint8_t b1 = (uint8_t) (addr_host >> 24);
         return b1 == 127;
     }
     case AF_INET6:
@@ -176,8 +168,8 @@ SockAddr::isPrivate() const
     case AF_INET: {
         auto addr_host = ntohl(getIPv4().sin_addr.s_addr);
         uint8_t b1, b2;
-        b1 = (uint8_t)(addr_host >> 24);
-        b2 = (uint8_t)((addr_host >> 16) & 0x0ff);
+        b1 = (uint8_t) (addr_host >> 24);
+        b2 = (uint8_t) ((addr_host >> 16) & 0x0ff);
         // 10.x.y.z
         if (b1 == 10)
             return true;
@@ -240,40 +232,86 @@ SockAddr::getMappedIPv6()
     return ret;
 }
 
-bool operator==(const SockAddr& a, const SockAddr& b) {
+bool
+operator==(const SockAddr& a, const SockAddr& b)
+{
     return a.equals(b);
 }
 
-time_point from_time_t(std::time_t t) {
-    auto dt = system_clock::from_time_t(t) - system_clock::now();
-    auto now = clock::now();
-    if (dt > system_clock::duration(0) and now > time_point::max() - dt)
-        return time_point::max();
-    else if (dt < system_clock::duration(0) and now < time_point::min() - dt)
+time_point
+from_system_time(system_clock::time_point t, time_point steady_now, system_clock::time_point system_now)
+{
+    if (t == system_clock::time_point::min())
         return time_point::min();
-    return now + dt;
+    if (t == system_clock::time_point::max())
+        return time_point::max();
+    // Saturate before the cast: the steady clock duration may hold a narrower range than the system one.
+    constexpr auto max_dt = std::chrono::duration_cast<system_clock::duration>(duration::max());
+    constexpr auto min_dt = std::chrono::duration_cast<system_clock::duration>(duration::min());
+    auto system_dt = t - system_now;
+    if (system_dt >= max_dt)
+        return time_point::max();
+    if (system_dt <= min_dt)
+        return time_point::min();
+    auto dt = std::chrono::duration_cast<duration>(system_dt);
+    if (dt > duration(0) and steady_now > time_point::max() - dt)
+        return time_point::max();
+    else if (dt < duration(0) and steady_now < time_point::min() - dt)
+        return time_point::min();
+    return steady_now + dt;
 }
 
-std::time_t to_time_t(time_point t) {
-    auto dt = t - clock::now();
-    auto now = system_clock::now();
-    if (dt > duration(0) and now >= system_clock::time_point::max() - dt)
-        return system_clock::to_time_t(system_clock::time_point::max());
-    else if (dt < duration(0) and now <= system_clock::time_point::min() - dt)
-        return system_clock::to_time_t(system_clock::time_point::min());
-    return system_clock::to_time_t(now + std::chrono::duration_cast<system_clock::duration>(dt));
+time_point
+from_system_time(system_clock::time_point t)
+{
+    return from_system_time(t, clock::now(), system_clock::now());
+}
+
+system_clock::time_point
+to_system_time(time_point t, time_point steady_now, system_clock::time_point system_now)
+{
+    if (t == time_point::min())
+        return system_clock::time_point::min();
+    if (t == time_point::max())
+        return system_clock::time_point::max();
+    // Cast first: mixing clock durations of different periods would overflow the bound computations below.
+    auto dt = std::chrono::duration_cast<system_clock::duration>(t - steady_now);
+    if (dt > system_clock::duration(0) and system_now >= system_clock::time_point::max() - dt)
+        return system_clock::time_point::max();
+    else if (dt < system_clock::duration(0) and system_now <= system_clock::time_point::min() - dt)
+        return system_clock::time_point::min();
+    return system_now + dt;
+}
+
+system_clock::time_point
+to_system_time(time_point t)
+{
+    return to_system_time(t, clock::now(), system_clock::now());
+}
+
+time_point
+from_time_t(std::time_t t)
+{
+    return from_system_time(system_clock::from_time_t(t));
+}
+
+std::time_t
+to_time_t(time_point t)
+{
+    return system_clock::to_time_t(to_system_time(t));
 }
 
 Blob
-unpackBlob(const msgpack::object& o) {
+unpackBlob(const msgpack::object& o)
+{
     switch (o.type) {
     case msgpack::type::BIN:
-        return {o.via.bin.ptr, o.via.bin.ptr+o.via.bin.size};
+        return {o.via.bin.ptr, o.via.bin.ptr + o.via.bin.size};
     case msgpack::type::STR:
-        return {o.via.str.ptr, o.via.str.ptr+o.via.str.size};
+        return {o.via.str.ptr, o.via.str.ptr + o.via.str.size};
     case msgpack::type::ARRAY: {
         Blob ret(o.via.array.size);
-        std::transform(o.via.array.ptr, o.via.array.ptr+o.via.array.size, ret.begin(), [](const msgpack::object& b) {
+        std::transform(o.via.array.ptr, o.via.array.ptr + o.via.array.size, ret.begin(), [](const msgpack::object& b) {
             return b.as<uint8_t>();
         });
         return ret;
@@ -283,22 +321,33 @@ unpackBlob(const msgpack::object& o) {
     }
 }
 
-msgpack::unpacked
-unpackMsg(Blob b) {
-    return msgpack::unpack((const char*)b.data(), b.size());
-}
-
 msgpack::object*
-findMapValue(const msgpack::object& map, const char* key, size_t key_length) {
-    if (map.type != msgpack::type::MAP) throw msgpack::type_error();
+findMapValue(const msgpack::object& map, const char* key, size_t key_length)
+{
+    if (map.type != msgpack::type::MAP)
+        throw msgpack::type_error();
     for (unsigned i = 0; i < map.via.map.size; i++) {
         auto& o = map.via.map.ptr[i];
-        if (o.key.type == msgpack::type::STR
-            && key_length == o.key.via.str.size
+        if (o.key.type == msgpack::type::STR && key_length == o.key.via.str.size
             && std::strncmp(o.key.via.str.ptr, key, o.key.via.str.size) == 0)
             return &o.val;
     }
     return nullptr;
 }
 
+std::string
+printByteCount(size_t bytes)
+{
+    static constexpr std::string_view suffixes[] = {"B", "KB", "MB", "GB", "TB"};
+    size_t suffixIndex = 0;
+    double count = static_cast<double>(bytes);
+    while (count >= 1024 && suffixIndex < std::size(suffixes) - 1) {
+        count /= 1024;
+        suffixIndex++;
+    }
+    if (suffixIndex == 0)
+        return fmt::format("{} {}", bytes, suffixes[suffixIndex]);
+    return fmt::format("{:.2f} {} ({} bytes)", count, suffixes[suffixIndex], bytes);
 }
+
+} // namespace dht

@@ -1,20 +1,5 @@
-/*
- *  Copyright (C) 2014-2025 Savoir-faire Linux Inc.
- *  Author(s) : Adrien Béraud <adrien.beraud@savoirfairelinux.com>
- *
- *  This program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License as published by
- *  the Free Software Foundation; either version 3 of the License, or
- *  (at your option) any later version.
- *
- *  This program is distributed in the hope that it will be useful,
- *  but WITHOUT ANY WARRANTY; without even the implied warranty of
- *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *  GNU General Public License for more details.
- *
- *  You should have received a copy of the GNU General Public License
- *  along with this program. If not, see <https://www.gnu.org/licenses/>.
- */
+// Copyright (c) 2014-2026 Savoir-faire Linux Inc.
+// SPDX-License-Identifier: MIT
 #pragma once
 
 #include "value.h"
@@ -26,22 +11,29 @@ enum class ListenSyncStatus { ADDED, SYNCED, UNSYNCED, REMOVED };
 using SyncCallback = std::function<void(ListenSyncStatus)>;
 using CallbackQueue = std::list<std::function<void()>>;
 
-class ValueCache {
+class ValueCache
+{
 public:
     explicit ValueCache(ValueStateCallback&& cb, SyncCallback&& scb = {})
-        : callback(std::forward<ValueStateCallback>(cb)), syncCallback(std::move(scb))
+        : callback(std::forward<ValueStateCallback>(cb))
+        , syncCallback(std::move(scb))
     {
         if (syncCallback)
             syncCallback(ListenSyncStatus::ADDED);
     }
-    ValueCache(ValueCache&& o) noexcept : values(std::move(o.values)), callback(std::move(o.callback)), syncCallback(std::move(o.syncCallback)) {
+    ValueCache(ValueCache&& o) noexcept
+        : values(std::move(o.values))
+        , callback(std::move(o.callback))
+        , syncCallback(std::move(o.syncCallback))
+    {
         o.callback = {};
         o.syncCallback = {};
     }
 
-    ~ValueCache() {
+    ~ValueCache()
+    {
         auto q = clear();
-        for (auto& cb: q)
+        for (auto& cb : q)
             cb();
         if (syncCallback) {
             if (status == ListenSyncStatus::SYNCED)
@@ -50,7 +42,8 @@ public:
         }
     }
 
-    CallbackQueue clear() {
+    CallbackQueue clear()
+    {
         std::vector<Sp<Value>> expired_values;
         expired_values.reserve(values.size());
         for (auto& v : values)
@@ -58,14 +51,13 @@ public:
         values.clear();
         CallbackQueue ret;
         if (not expired_values.empty() and callback) {
-            ret.emplace_back([expired_values = std::move(expired_values), cb = callback]{
-                cb(expired_values, true);
-            });
+            ret.emplace_back([expired_values = std::move(expired_values), cb = callback] { cb(expired_values, true); });
         }
         return ret;
     }
 
-    time_point expireValues(const time_point& now) {
+    time_point expireValues(const time_point& now)
+    {
         time_point ret = time_point::max();
         auto cbs = expireValues(now, ret);
         while (not cbs.empty()) {
@@ -75,14 +67,25 @@ public:
         return ret;
     }
 
-    CallbackQueue expireValues(const time_point& now, time_point& next) {
+    CallbackQueue expireValues(const time_point& now, time_point& next)
+    {
         std::vector<Sp<Value>> expired_values;
         for (auto it = values.begin(); it != values.end();) {
-            if (it->second.expiration <= now) {
+            auto effectiveExpiration = it->second.expiration;
+            if (status == ListenSyncStatus::SYNCED)
+                // While the listen is synced, the remote node pushes
+                // explicit expirations and periodic refreshes.  Add a
+                // grace period proportional to the value's type
+                // expiration so that a single lost UDP refresh
+                // notification does not cause a premature local drop.
+                // A grace of one type-expiration covers exactly one
+                // missed re-announcement cycle.
+                effectiveExpiration += it->second.typeExpiration;
+            if (effectiveExpiration <= now) {
                 expired_values.emplace_back(std::move(it->second.data));
                 it = values.erase(it);
             } else {
-                next = std::min(next, it->second.expiration);
+                next = std::min(next, effectiveExpiration);
                 ++it;
             }
         }
@@ -102,18 +105,16 @@ public:
         }
         CallbackQueue ret;
         if (not expired_values.empty() and callback) {
-            ret.emplace_back([cb = callback, expired_values = std::move(expired_values)]{
-                cb(expired_values, true);
-            });
+            ret.emplace_back([cb = callback, expired_values = std::move(expired_values)] { cb(expired_values, true); });
         }
         return ret;
     }
 
-    time_point onValues
-        (const std::vector<Sp<Value>>& new_values,
-        const std::vector<Value::Id>& refreshed_values,
-        const std::vector<Value::Id>& expired_values,
-        const TypeStore& types, const time_point& now)
+    time_point onValues(const std::vector<Sp<Value>>& new_values,
+                        const std::vector<Value::Id>& refreshed_values,
+                        const std::vector<Value::Id>& expired_values,
+                        const TypeStore& types,
+                        const time_point& now)
     {
         CallbackQueue cbs;
         time_point ret = time_point::max();
@@ -131,7 +132,8 @@ public:
         return ret;
     }
 
-    void onSynced(bool synced) {
+    void onSynced(bool synced)
+    {
         auto newStatus = synced ? ListenSyncStatus::SYNCED : ListenSyncStatus::UNSYNCED;
         if (status != newStatus) {
             status = newStatus;
@@ -140,9 +142,7 @@ public:
         }
     }
 
-    size_t size() const {
-        return values.size();
-    }
+    size_t size() const { return values.size(); }
 
 private:
     // prevent copy
@@ -153,14 +153,20 @@ private:
     /* The maximum number of values we store in the cache. */
     static constexpr unsigned MAX_VALUES {4096};
 
-    struct CacheValueStorage {
+    struct CacheValueStorage
+    {
         Sp<Value> data {};
         time_point created {};
         time_point expiration {};
+        duration typeExpiration {}; /* value type's expiration period, used as grace when synced */
 
         CacheValueStorage() {}
-        CacheValueStorage(const Sp<Value>& v, time_point t, time_point e)
-         : data(v), created(t), expiration(e) {}
+        CacheValueStorage(const Sp<Value>& v, time_point t, time_point e, duration te)
+            : data(v)
+            , created(t)
+            , expiration(e)
+            , typeExpiration(te)
+        {}
     };
 
     std::map<Value::Id, CacheValueStorage> values;
@@ -168,46 +174,57 @@ private:
     SyncCallback syncCallback;
     ListenSyncStatus status {ListenSyncStatus::UNSYNCED};
 
-    CallbackQueue addValues(const std::vector<Sp<Value>>& new_values, const TypeStore& types, const time_point& now) {
+    CallbackQueue addValues(const std::vector<Sp<Value>>& new_values, const TypeStore& types, const time_point& now)
+    {
         std::vector<Sp<Value>> nvals;
         for (const auto& value : new_values) {
+            auto te = types.getType(value->type).expiration;
             auto v = values.find(value->id);
             if (v == values.end()) {
                 // new value
                 nvals.emplace_back(value);
-                values.emplace(value->id, CacheValueStorage(value, now, now + types.getType(value->type).expiration));
+                values.emplace(value->id, CacheValueStorage(value, now, now + te, te));
             } else {
                 // refreshed value
                 v->second.created = now;
-                v->second.expiration = now + types.getType(v->second.data->type).expiration;
+                v->second.expiration = now + te;
+                v->second.typeExpiration = te;
+                if (*value != *v->second.data and value->seq > v->second.data->seq) {
+                    // edited value (same rule as OpValueCache): emit as add
+                    v->second.data = value;
+                    nvals.emplace_back(value);
+                }
             }
         }
         CallbackQueue ret;
         if (callback and not nvals.empty())
-            ret.emplace_back([cb = callback, nvals = std::move(nvals)]{
-                cb(nvals, false);
-            });
+            ret.emplace_back([cb = callback, nvals = std::move(nvals)] { cb(nvals, false); });
         return ret;
     }
-    CallbackQueue expireValue(Value::Id vid) {
+    CallbackQueue expireValue(Value::Id vid)
+    {
         auto v = values.find(vid);
         if (v == values.end())
             return {};
         std::vector<Sp<Value>> val {std::move(v->second.data)};
         values.erase(v);
         CallbackQueue ret;
-        ret.emplace_back([cb = callback, val = std::move(val)]{
-            if (cb) cb(val, true);
+        ret.emplace_back([cb = callback, val = std::move(val)] {
+            if (cb)
+                cb(val, true);
         });
         return ret;
     }
-    void refreshValue(Value::Id vid, const TypeStore& types, const time_point& now) {
+    void refreshValue(Value::Id vid, const TypeStore& types, const time_point& now)
+    {
         auto v = values.find(vid);
         if (v == values.end())
             return;
+        auto te = types.getType(v->second.data->type).expiration;
         v->second.created = now;
-        v->second.expiration = now + types.getType(v->second.data->type).expiration;
+        v->second.expiration = now + te;
+        v->second.typeExpiration = te;
     }
 };
 
-}
+} // namespace dht

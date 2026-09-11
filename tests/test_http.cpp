@@ -1,0 +1,442 @@
+// Copyright (c) 2014-2026 Savoir-faire Linux Inc.
+// SPDX-License-Identifier: MIT
+
+#include "test_http.h"
+
+#include <opendht/value.h>
+#include <opendht/dhtrunner.h>
+
+#include <iostream>
+#include <string>
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
+
+namespace test {
+CPPUNIT_TEST_SUITE_REGISTRATION(HttpTester);
+
+void
+HttpTester::setUp()
+{
+    nodePeer = std::make_shared<dht::DhtRunner>();
+    nodePeer->run(0);
+
+    auto nodeProxy = std::make_shared<dht::DhtRunner>();
+    nodeProxy->run(0, /*identity*/ {}, /*threaded*/ true);
+    auto bound = nodePeer->getBound();
+    if (bound.isUnspecified())
+        bound.setLoopback();
+    nodeProxy->bootstrap(bound);
+
+    dht::ProxyServerConfig config;
+    config.port = 8080;
+    config.pushServer = "127.0.0.1:8090";
+    serverProxy = std::make_unique<dht::DhtProxyServer>(nodeProxy, config);
+
+    // Wait for the server to start
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+}
+
+void
+HttpTester::tearDown()
+{
+    serverProxy.reset();
+    nodePeer->join();
+}
+
+void
+HttpTester::test_parse_url()
+{
+    // Arrange
+    std::string url = "http://google.com/";
+    // Act
+    dht::http::Url parsed(url);
+    // Assert
+    CPPUNIT_ASSERT(parsed.url == url);
+    CPPUNIT_ASSERT(parsed.protocol == "http");
+    CPPUNIT_ASSERT(parsed.host == "google.com");
+    CPPUNIT_ASSERT(parsed.target == "/");
+}
+
+void
+HttpTester::test_parse_https_url_no_service()
+{
+    // Arrange
+    std::string url = "https://jami.net/";
+    // Act
+    dht::http::Url parsed(url);
+    // Assert
+    CPPUNIT_ASSERT(parsed.url == url);
+    CPPUNIT_ASSERT(parsed.protocol == "https");
+    CPPUNIT_ASSERT(parsed.host == "jami.net");
+    CPPUNIT_ASSERT(parsed.target == "/");
+}
+
+void
+HttpTester::test_parse_url_no_prefix_no_target()
+{
+    // Arrange
+    std::string url = "google.com";
+    // Act
+    dht::http::Url parsed(url);
+    // Assert
+    CPPUNIT_ASSERT(parsed.url == url);
+    CPPUNIT_ASSERT(parsed.protocol == "http");
+    CPPUNIT_ASSERT(parsed.host == "google.com");
+    CPPUNIT_ASSERT(parsed.target == "");
+}
+
+void
+HttpTester::test_parse_url_target()
+{
+    // Arrange
+    std::string url = "https://www.google.com:666/going/under";
+    // Act
+    dht::http::Url parsed(url);
+    // Assert
+    CPPUNIT_ASSERT(parsed.url == url);
+    CPPUNIT_ASSERT(parsed.protocol == "https");
+    CPPUNIT_ASSERT(parsed.host == "www.google.com");
+    CPPUNIT_ASSERT(parsed.service == "666");
+    CPPUNIT_ASSERT(parsed.target == "/going/under");
+}
+
+void
+HttpTester::test_parse_url_query()
+{
+    // Arrange
+    std::string url = "http://google.com/?key=1";
+    // Act
+    dht::http::Url parsed(url);
+    // Assert
+    CPPUNIT_ASSERT(parsed.url == url);
+    CPPUNIT_ASSERT(parsed.protocol == "http");
+    CPPUNIT_ASSERT(parsed.host == "google.com");
+    CPPUNIT_ASSERT(parsed.target == "/?key=1");
+    CPPUNIT_ASSERT(parsed.query == "key=1");
+}
+
+void
+HttpTester::test_parse_url_fragment()
+{
+    // Arrange
+    std::string url = "http://google.com/?key=1#some-important-id";
+    // Act
+    dht::http::Url parsed(url);
+    // Assert
+    CPPUNIT_ASSERT(parsed.url == url);
+    CPPUNIT_ASSERT(parsed.protocol == "http");
+    CPPUNIT_ASSERT(parsed.host == "google.com");
+    CPPUNIT_ASSERT(parsed.target == "/?key=1");
+    CPPUNIT_ASSERT(parsed.query == "key=1");
+    CPPUNIT_ASSERT(parsed.fragment == "#some-important-id");
+}
+
+void
+HttpTester::test_parse_url_ipv4()
+{
+    // Arrange
+    std::string url = "http://172.217.13.132/";
+    // Act
+    dht::http::Url parsed(url);
+    // Assert
+    CPPUNIT_ASSERT(parsed.url == url);
+    CPPUNIT_ASSERT(parsed.protocol == "http");
+    CPPUNIT_ASSERT(parsed.host == "172.217.13.132");
+    CPPUNIT_ASSERT(parsed.target == "/");
+}
+
+void
+HttpTester::test_parse_url_no_prefix_no_target_ipv4()
+{
+    // Arrange
+    std::string url = "172.217.13.132";
+    // Act
+    dht::http::Url parsed(url);
+    // Assert
+    CPPUNIT_ASSERT(parsed.url == url);
+    CPPUNIT_ASSERT(parsed.protocol == "http");
+    CPPUNIT_ASSERT(parsed.host == "172.217.13.132");
+}
+
+void
+HttpTester::test_parse_url_target_ipv4()
+{
+    // Arrange
+    std::string url = "https://172.217.13.132:666/going/under";
+    // Act
+    dht::http::Url parsed(url);
+    // Assert
+    CPPUNIT_ASSERT(parsed.url == url);
+    CPPUNIT_ASSERT(parsed.protocol == "https");
+    CPPUNIT_ASSERT(parsed.host == "172.217.13.132");
+    CPPUNIT_ASSERT(parsed.service == "666");
+    CPPUNIT_ASSERT(parsed.target == "/going/under");
+}
+
+void
+HttpTester::test_parse_url_ipv6()
+{
+    // Arrange
+    std::string url = "http://[2607:f8b0:4006:804::2004]/";
+    // Act
+    dht::http::Url parsed(url);
+    // Assert
+    CPPUNIT_ASSERT(parsed.url == url);
+    CPPUNIT_ASSERT(parsed.protocol == "http");
+    CPPUNIT_ASSERT(parsed.host == "2607:f8b0:4006:804::2004");
+    CPPUNIT_ASSERT(parsed.target == "/");
+}
+
+void
+HttpTester::test_parse_url_no_prefix_no_target_ipv6()
+{
+    // Arrange
+    std::string url = "2607:f8b0:4006:804::2004";
+    // Act
+    dht::http::Url parsed(url);
+    // Assert
+    CPPUNIT_ASSERT(parsed.url == url);
+    CPPUNIT_ASSERT(parsed.protocol == "http");
+    CPPUNIT_ASSERT(parsed.host == "2607:f8b0:4006:804::2004");
+}
+
+void
+HttpTester::test_parse_url_target_ipv6()
+{
+    // Arrange
+    std::string url = "https://[2607:f8b0:4006:804::2004]:666/going/under";
+    // Act
+    dht::http::Url parsed(url);
+    // Assert
+    CPPUNIT_ASSERT(parsed.url == url);
+    CPPUNIT_ASSERT(parsed.protocol == "https");
+    CPPUNIT_ASSERT(parsed.host == "2607:f8b0:4006:804::2004");
+    CPPUNIT_ASSERT(parsed.service == "666");
+    CPPUNIT_ASSERT(parsed.target == "/going/under");
+}
+
+void
+HttpTester::test_parse_url_user_pass()
+{
+    // Arrange
+    std::string url = "http://user:pass@example.com/";
+    // Act
+    dht::http::Url parsed(url);
+    // Assert
+    CPPUNIT_ASSERT_EQUAL(url, parsed.toString());
+    CPPUNIT_ASSERT_EQUAL(std::string("http"), parsed.protocol);
+    CPPUNIT_ASSERT_EQUAL(std::string_view("user"), parsed.user);
+    CPPUNIT_ASSERT_EQUAL(std::string_view("pass"), parsed.password);
+    CPPUNIT_ASSERT_EQUAL(std::string_view("example.com"), parsed.host);
+    CPPUNIT_ASSERT_EQUAL(std::string("/"), parsed.target);
+}
+
+void
+HttpTester::test_parse_url_user_only()
+{
+    // Arrange
+    std::string url = "http://user@example.com/";
+    // Act
+    dht::http::Url parsed(url);
+    // Assert
+    CPPUNIT_ASSERT_EQUAL(url, parsed.toString());
+    CPPUNIT_ASSERT_EQUAL(std::string("http"), parsed.protocol);
+    CPPUNIT_ASSERT_EQUAL(std::string_view("user"), parsed.user);
+    CPPUNIT_ASSERT(parsed.password.empty());
+    CPPUNIT_ASSERT_EQUAL(std::string_view("example.com"), parsed.host);
+    CPPUNIT_ASSERT_EQUAL(std::string("/"), parsed.target);
+}
+
+void
+HttpTester::test_parse_url_ipv6_brackets()
+{
+    // Arrange
+    std::string url = "http://[2001:db8::1]/";
+    // Act
+    dht::http::Url parsed(url);
+    // Assert
+    CPPUNIT_ASSERT_EQUAL(url, parsed.toString());
+    CPPUNIT_ASSERT_EQUAL(std::string("http"), parsed.protocol);
+    CPPUNIT_ASSERT_EQUAL(std::string_view("2001:db8::1"), parsed.host);
+    CPPUNIT_ASSERT_EQUAL(std::string("/"), parsed.target);
+}
+
+void
+HttpTester::test_parse_url_ipv6_brackets_port()
+{
+    // Arrange
+    std::string url = "http://[2001:db8::1]:8080/";
+    // Act
+    dht::http::Url parsed(url);
+    // Assert
+    CPPUNIT_ASSERT_EQUAL(url, parsed.toString());
+    CPPUNIT_ASSERT_EQUAL(std::string("http"), parsed.protocol);
+    CPPUNIT_ASSERT_EQUAL(std::string_view("2001:db8::1"), parsed.host);
+    CPPUNIT_ASSERT_EQUAL(std::string_view("8080"), parsed.service);
+    CPPUNIT_ASSERT_EQUAL(std::string("/"), parsed.target);
+}
+
+void
+HttpTester::test_parse_url_mixed_case_protocol()
+{
+    // Arrange
+    std::string url = "HtTp://example.com/";
+    // Act
+    dht::http::Url parsed(url);
+    // Assert
+    CPPUNIT_ASSERT_EQUAL(std::string("http://example.com/"), parsed.toString());
+    CPPUNIT_ASSERT_EQUAL(std::string("http"), parsed.protocol);
+    CPPUNIT_ASSERT_EQUAL(std::string_view("example.com"), parsed.host);
+}
+
+void
+HttpTester::test_parse_url_complex_path_query_fragment()
+{
+    // Arrange
+    std::string url = "https://example.com/path/to/resource?query=param&q2=v2#fragment";
+    // Act
+    dht::http::Url parsed(url);
+    // Assert
+    CPPUNIT_ASSERT_EQUAL(url, parsed.toString());
+    CPPUNIT_ASSERT_EQUAL(std::string("https"), parsed.protocol);
+    CPPUNIT_ASSERT_EQUAL(std::string_view("example.com"), parsed.host);
+    CPPUNIT_ASSERT_EQUAL(std::string("/path/to/resource?query=param&q2=v2"), parsed.target);
+    CPPUNIT_ASSERT_EQUAL(std::string_view("query=param&q2=v2"), parsed.query);
+    CPPUNIT_ASSERT_EQUAL(std::string_view("#fragment"), parsed.fragment);
+}
+
+void
+HttpTester::test_parse_url_empty()
+{
+    // Arrange
+    std::string url = "";
+    // Act
+    dht::http::Url parsed(url);
+    // Assert
+    CPPUNIT_ASSERT(parsed.url.empty());
+    CPPUNIT_ASSERT_EQUAL(std::string("http"), parsed.protocol); // Default
+    CPPUNIT_ASSERT(parsed.host.empty());
+}
+
+void
+HttpTester::test_parse_url_just_slash()
+{
+    // Arrange
+    std::string url = "/";
+    // Act
+    dht::http::Url parsed(url);
+    // Assert
+    CPPUNIT_ASSERT_EQUAL(std::string("http:///"), parsed.toString());
+    CPPUNIT_ASSERT_EQUAL(std::string("http"), parsed.protocol);
+    CPPUNIT_ASSERT(parsed.host.empty());
+    CPPUNIT_ASSERT_EQUAL(std::string("/"), parsed.target);
+}
+
+void
+HttpTester::test_completed_resolver_callback_uses_io_thread()
+{
+    asio::io_context ioContext;
+    const asio::ip::tcp::endpoint endpoint(asio::ip::address_v4::loopback(), 80);
+    dht::http::Resolver resolver(ioContext, {endpoint});
+    const auto callerThread = std::this_thread::get_id();
+    std::thread::id callbackThread;
+    asio::error_code callbackError;
+    std::vector<asio::ip::tcp::endpoint> resolvedEndpoints;
+    std::atomic_bool callbackCalled {false};
+
+    resolver.add_callback([&](const asio::error_code& ec, const auto& endpoints) {
+        callbackError = ec;
+        callbackThread = std::this_thread::get_id();
+        resolvedEndpoints = endpoints;
+        callbackCalled = true;
+    });
+
+    CPPUNIT_ASSERT(!callbackCalled);
+    std::thread ioThread([&] { ioContext.run(); });
+    ioThread.join();
+
+    CPPUNIT_ASSERT(callbackCalled);
+    CPPUNIT_ASSERT(!callbackError);
+    CPPUNIT_ASSERT(callbackThread != callerThread);
+    CPPUNIT_ASSERT_EQUAL(size_t(1), resolvedEndpoints.size());
+    CPPUNIT_ASSERT_EQUAL(endpoint, resolvedEndpoints.front());
+}
+
+void
+HttpTester::test_send_json()
+{
+    // Arrange
+    std::condition_variable cv;
+    std::mutex cv_m;
+    std::unique_lock lk(cv_m);
+    bool done = false;
+    unsigned int status = 0;
+
+    auto json = dht::Value("hey").toJson();
+    Json::Value resp_val;
+
+    // Act
+    auto request = std::make_shared<dht::http::Request>(serverProxy->io_context(),
+                                                        "http://127.0.0.1:8080/key/key",
+                                                        json,
+                                                        [&](Json::Value value, const dht::http::Response& response) {
+                                                            std::lock_guard lk(cv_m);
+                                                            resp_val = std::move(value);
+                                                            status = response.status_code;
+                                                            done = true;
+                                                            cv.notify_all();
+                                                        });
+    request->send();
+
+    // Assert
+    CPPUNIT_ASSERT(cv.wait_for(lk, std::chrono::seconds(10), [&] { return done; }));
+    CPPUNIT_ASSERT_EQUAL(200u, status);
+    CPPUNIT_ASSERT_EQUAL(json["data"].asString(), resp_val["data"].asString());
+    done = false;
+
+#if 0
+    request = std::make_shared<dht::http::Request>(serverProxy->io_context(),
+        "http://google.ca",
+        [&](const dht::http::Response& response) {
+            std::lock_guard lk(cv_m);
+            status = response.status_code;
+            done = true;
+            cv.notify_all();
+        });
+    request->send();
+
+    CPPUNIT_ASSERT(cv.wait_for(lk, std::chrono::seconds(10), [&]{ return done; }));
+    CPPUNIT_ASSERT(status != 0);
+    done = false;
+
+    request = std::make_shared<dht::http::Request>(serverProxy->io_context(),
+        "https://google.ca",
+        [&](const dht::http::Response& response) {
+            std::lock_guard lk(cv_m);
+            status = response.status_code;
+            done = true;
+            cv.notify_all();
+        });
+    request->send();
+
+    CPPUNIT_ASSERT(cv.wait_for(lk, std::chrono::seconds(10), [&]{ return done; }));
+    CPPUNIT_ASSERT(status != 0);
+    done = false;
+
+    request = std::make_shared<dht::http::Request>(serverProxy->io_context(),
+        "https://google.ca/sdbjklwGBIP",
+        [&](const dht::http::Response& response) {
+            std::lock_guard lk(cv_m);
+            status = response.status_code;
+            done = true;
+            cv.notify_all();
+        });
+    request->send();
+
+    CPPUNIT_ASSERT(cv.wait_for(lk, std::chrono::seconds(10), [&]{ return done; }));
+    CPPUNIT_ASSERT_EQUAL(404u, status);
+#endif
+}
+
+} // namespace test

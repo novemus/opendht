@@ -1,20 +1,5 @@
-/*
- *  Copyright (C) 2014-2025 Savoir-faire Linux Inc.
- *  Author(s) : Adrien Béraud <adrien.beraud@savoirfairelinux.com>
- *
- *  This program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License as published by
- *  the Free Software Foundation; either version 3 of the License, or
- *  (at your option) any later version.
- *
- *  This program is distributed in the hope that it will be useful,
- *  but WITHOUT ANY WARRANTY; without even the implied warranty of
- *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *  GNU General Public License for more details.
- *
- *  You should have received a copy of the GNU General Public License
- *  along with this program. If not, see <https://www.gnu.org/licenses/>.
- */
+// Copyright (c) 2014-2026 Savoir-faire Linux Inc.
+// SPDX-License-Identifier: MIT
 #include "op_cache.h"
 
 namespace dht {
@@ -22,35 +7,43 @@ namespace dht {
 constexpr const std::chrono::seconds OpCache::EXPIRATION;
 
 bool
-OpValueCache::onValuesAdded(const std::vector<Sp<Value>>& vals, const system_clock::time_point& t) {
+OpValueCache::onValuesAdded(const std::vector<Sp<Value>>& vals, const system_clock::time_point& t)
+{
     std::vector<Sp<Value>> newValues;
     for (const auto& v : vals) {
         auto viop = values.emplace(v->id, v);
+        auto& stored = viop.first->second;
         if (viop.second) {
             newValues.emplace_back(v);
-        } else if (*viop.first->second.data != *v) {
-            // Special case for edition
-            if (v->seq > viop.first->second.data->seq) {
-                viop.first->second.data = v;
-                newValues.emplace_back(v);
-            }
-        } else {
-            viop.first->second.refCount++;
+        } else if (*stored.data != *v) {
+            if (v->seq <= stored.data->seq)
+                continue; // older version from a lagging source
+            // Edited: only the reporting source is known to hold this version
+            stored.data = v;
+            stored.refCount = 1;
+            newValues.emplace_back(v);
+        } else if (countSources) {
+            stored.refCount++;
         }
-        viop.first->second.updated = t;
+        stored.updated = t;
     }
     return newValues.empty() ? true : callback(newValues, false);
 }
 
 bool
-OpValueCache::onValuesExpired(const std::vector<Sp<Value>>& vals, const system_clock::time_point& t) {
+OpValueCache::onValuesExpired(const std::vector<Sp<Value>>& vals, const system_clock::time_point& t)
+{
     std::vector<Sp<Value>> expiredValues;
     for (const auto& v : vals) {
         auto vit = values.find(v->id);
         if (vit != values.end()) {
             if (vit->second.updated > t)
                 continue;
-            
+            // Mirror onValuesAdded: a version that was never counted (different
+            // content, not a newer seq) must not decrement the refcount
+            if (*v != *vit->second.data and v->seq <= vit->second.data->seq)
+                continue;
+
             vit->second.updated = t;
             vit->second.refCount--;
             if (not vit->second.refCount) {
@@ -71,7 +64,7 @@ OpValueCache::onValuesExpired(const std::vector<Value::Id>& vids, const system_c
         if (vit != values.end()) {
             if (vit->second.updated > t)
                 continue;
-            
+
             vit->second.updated = t;
             vit->second.refCount--;
             if (not vit->second.refCount) {
@@ -84,7 +77,8 @@ OpValueCache::onValuesExpired(const std::vector<Value::Id>& vids, const system_c
 }
 
 std::vector<Sp<Value>>
-OpValueCache::get(const Value::Filter& filter) const {
+OpValueCache::get(const Value::Filter& filter) const
+{
     std::vector<Sp<Value>> ret;
     if (not filter)
         ret.reserve(values.size());
@@ -95,7 +89,8 @@ OpValueCache::get(const Value::Filter& filter) const {
 }
 
 Sp<Value>
-OpValueCache::get(Value::Id id) const {
+OpValueCache::get(Value::Id id) const
+{
     auto v = values.find(id);
     if (v == values.end())
         return {};
@@ -103,7 +98,8 @@ OpValueCache::get(Value::Id id) const {
 }
 
 std::vector<Sp<Value>>
-OpValueCache::getValues() const {
+OpValueCache::getValues() const
+{
     std::vector<Sp<Value>> ret;
     ret.reserve(values.size());
     for (const auto& v : values)
@@ -112,7 +108,8 @@ OpValueCache::getValues() const {
 }
 
 void
-OpCache::onValuesAdded(const std::vector<Sp<Value>>& vals) {
+OpCache::onValuesAdded(const std::vector<Sp<Value>>& vals)
+{
     if (not listeners.empty()) {
         std::vector<LocalListener> list;
         list.reserve(listeners.size());
@@ -124,7 +121,8 @@ OpCache::onValuesAdded(const std::vector<Sp<Value>>& vals) {
 }
 
 void
-OpCache::onValuesExpired(const std::vector<Sp<Value>>& vals) {
+OpCache::onValuesExpired(const std::vector<Sp<Value>>& vals)
+{
     if (not listeners.empty()) {
         std::vector<LocalListener> list;
         list.reserve(listeners.size());
@@ -136,7 +134,8 @@ OpCache::onValuesExpired(const std::vector<Sp<Value>>& vals) {
 }
 
 time_point
-OpCache::getExpiration() const {
+OpCache::getExpiration() const
+{
     if (not listeners.empty())
         return time_point::max();
     return lastRemoved + EXPIRATION;
@@ -181,13 +180,12 @@ SearchCache::listen(const ValueCallback& get_cb, const Sp<Query>& q, Value::Filt
     auto op = getOp(q);
     if (op == ops.end()) {
         // New query
-        op = ops.emplace(q, std::make_unique<OpCache>()).first;
+        op = ops.emplace(q, std::make_unique<OpCache>(countSources_)).first;
         auto& cache = *op->second;
-        cache.searchToken = onListen(q, [&](const std::vector<Sp<Value>>& values, bool expired){
-            return cache.onValue(values, expired);
-        }, [&](ListenSyncStatus status) {
-            cache.onNodeChanged(status);
-        });
+        cache.searchToken = onListen(
+            q,
+            [&](const std::vector<Sp<Value>>& values, bool expired) { return cache.onValue(values, expired); },
+            [&](ListenSyncStatus status) { cache.onNodeChanged(status); });
     }
     auto token = nextToken_++;
     if (nextToken_ == 0)
@@ -196,7 +194,8 @@ SearchCache::listen(const ValueCallback& get_cb, const Sp<Query>& q, Value::Filt
 }
 
 bool
-SearchCache::cancelListen(size_t gtoken, const time_point& now) {
+SearchCache::cancelListen(size_t gtoken, const time_point& now)
+{
     for (auto& op : ops) {
         if (op.second->removeListener(gtoken, now)) {
             nextExpiration_ = std::min(nextExpiration_, op.second->getExpiration());
@@ -207,7 +206,8 @@ SearchCache::cancelListen(size_t gtoken, const time_point& now) {
 }
 
 void
-SearchCache::cancelAll(const std::function<void(size_t)>& onCancel) {
+SearchCache::cancelAll(const std::function<void(size_t)>& onCancel)
+{
     for (auto& op : ops) {
         auto cache = std::move(op.second);
         cache->removeAll();
@@ -216,13 +216,21 @@ SearchCache::cancelAll(const std::function<void(size_t)>& onCancel) {
     ops.clear();
 }
 
+void
+SearchCache::clear()
+{
+    ops.clear();
+    nextExpiration_ = time_point::max();
+}
+
 time_point
-SearchCache::expire(const time_point& now, const std::function<void(size_t)>& onCancel) {
+SearchCache::expire(const time_point& now, const std::function<void(size_t)>& onCancel)
+{
     nextExpiration_ = time_point::max();
     auto ret = nextExpiration_;
     for (auto it = ops.begin(); it != ops.end();) {
         auto expiration = it->second->getExpiration();
-        if (expiration < now) {
+        if (expiration <= now) {
             auto cache = std::move(it->second);
             it = ops.erase(it);
             onCancel(cache->searchToken);
@@ -238,19 +246,22 @@ SearchCache::expire(const time_point& now, const std::function<void(size_t)>& on
 bool
 SearchCache::get(const Value::Filter& f, const Sp<Query>& q, const GetCallback& gcb, const DoneCallback& dcb) const
 {
+    if (not gcb)
+        return false;
     auto op = getOp(q);
-    if (op != ops.end()) {
-        auto vals = op->second->get(f);
-        if ((not vals.empty() and not gcb(vals)) or op->second->isSynced()) {
-            dcb(true, {});
-            return true;
-        }
-    }
-    return false;
+    if (op == ops.end() or not op->second->isSynced())
+        return false;
+    auto vals = op->second->get(f);
+    if (not vals.empty())
+        gcb(vals); // a consumer stopping early is not a failure
+    if (dcb)
+        dcb(true, {});
+    return true;
 }
 
 std::vector<Sp<Value>>
-SearchCache::get(const Value::Filter& filter) const {
+SearchCache::get(const Value::Filter& filter) const
+{
     if (ops.size() == 1)
         return ops.begin()->second->get(filter);
     std::map<Value::Id, Sp<Value>> c;
@@ -266,11 +277,12 @@ SearchCache::get(const Value::Filter& filter) const {
 }
 
 Sp<Value>
-SearchCache::get(Value::Id id) const {
+SearchCache::get(Value::Id id) const
+{
     for (const auto& op : ops)
         if (auto v = op.second->get(id))
             return v;
     return {};
 }
 
-}
+} // namespace dht

@@ -23,31 +23,12 @@
 **/dhtchat
 **/dhtscanner
 
-# Autotools
-/ac
-Makefile
-Makefile.in
-/aclocal.m4
-/autom4te.cache/
-/config.*
-/configure
-/depcomp
-/install-sh
-/libtool
-/ltmain.sh
-/m4/
-/missing
-/stamp-h?
-.deps/
-.dirstamp
-.libs/
-*.l[ao]
-*~
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+*ConfigVersion.cmake
 *.pc
-
-# KDevelop
-.kdev4/
-*.kdev4
 
 # VSCode
 .vscode/*
@@ -59,7 +40,6 @@ CMakeSettings.json
 # Eclipse CDT
 .cproject
 .project
-.autotools
 language.settings.xml
 
 # Python
@@ -67,6 +47,9 @@ language.settings.xml
 *.stamp
 python/opendht.cpp
 python/setup.py
+python/dist/
+wheelhouse/
+*.egg-info/
 
 # Doxygen
 doc/Doxyfile
