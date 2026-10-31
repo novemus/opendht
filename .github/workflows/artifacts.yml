@@ -120,6 +120,7 @@ jobs:
       TARGET_ARCH: x64
       VCPKG_TOOLCHAIN_FILE: "C:\\vcpkg\\scripts\\buildsystems\\vcpkg.cmake"
       GNULIB_ARCHIVE: ${{ vars.GNULIB_ARCHIVE }}
+      AUTOCONF_ARCHIVE: ${{ vars.AUTOCONF_ARCHIVE }}
 
     steps:
       - uses: actions/checkout@v4
@@ -134,17 +135,23 @@ jobs:
             ${{ runner.os }}-vcpkg-${{ env.TARGET_ARCH }}-${{ hashFiles('**/vcpkg.json', '**/vcpkg-configuration.json') }}
             ${{ runner.os }}-vcpkg-${{ env.TARGET_ARCH }}-
 
-      - name: Prefetch gnulib for vcpkg
+      - name: Prefetch gnulib ang autoconf for vcpkg
         shell: pwsh
         run: |
           $downloads = "C:\vcpkg\downloads"
-          $filename  = "gnulib-3639c57.tar.gz"
-          $dest      = Join-Path $downloads $filename
+          $gnulibarchive    = "gnulib-3639c57.tar.gz"
+          $autoconfarchive  = "autoconf2.71-2.71-3-any.pkg.tar.zst"
+          $gnulibdest       = Join-Path $downloads $gnulibarchive
+          $autoconfdest     = Join-Path $downloads $autoconfarchive
 
           New-Item -ItemType Directory -Path $downloads -Force | Out-Null
 
-          if (-not (Test-Path $dest)) {
-            Invoke-WebRequest -Uri "${{ env.GNULIB_ARCHIVE }}" -OutFile $dest
+          if (-not (Test-Path $gnulibdest)) {
+            Invoke-WebRequest -Uri "${{ env.GNULIB_ARCHIVE }}" -OutFile $gnulibdest
+          }
+
+          if (-not (Test-Path $autoconfdest)) {
+            Invoke-WebRequest -Uri "${{ env.AUTOCONF_ARCHIVE }}" -OutFile $autoconfdest
           }
 
       - name: Build static
