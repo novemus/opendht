@@ -173,7 +173,7 @@
             ],
             "variables": {
                 "CPACK_PACKAGING_INSTALL_PREFIX": "/opt",
-                "CPACK_DEBIAN_PACKAGE_DEPENDS": "libopendht (>= 3.4.0), libgnutls28-dev, libmsgpack-cxx-dev, libargon2-dev, libasio-dev, libjsoncpp-dev, libhttp-parser-dev, libssl-dev, libfmt-dev, nettle-dev",
+                "CPACK_DEBIAN_PACKAGE_DEPENDS": "libopendht (>= 4.4.0), libgnutls28-dev, libmsgpack-cxx-dev, libargon2-dev, libasio-dev, libjsoncpp-dev, libhttp-parser-dev, libssl-dev, libfmt-dev, nettle-dev",
                 "CPACK_COMPONENTS_ALL": "archive_files;header_files;config_files",
                 "CPACK_INSTALL_CMAKE_PROJECTS": "../static-relwithdebinfo;tubus;ALL;/;../shared-relwithdebinfo;tubus;ALL;/"
             },
